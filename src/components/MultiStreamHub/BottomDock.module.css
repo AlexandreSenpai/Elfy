@@ -1,0 +1,152 @@
+.dockWrapper {
+  width: 100%;
+  padding-bottom: 20px;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.dockContainer {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  background-color: rgba(17, 24, 34, 0.95);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--outline-variant);
+  box-shadow: var(--shadow-dock);
+}
+
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background-color: var(--surface-container);
+  color: var(--on-surface);
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.iconBtn:hover {
+  background-color: var(--surface-container-high);
+  transform: scale(1.06);
+}
+
+.iconBtn:active {
+  transform: scale(0.96);
+}
+
+.iconBtnMuted {
+  background-color: var(--error-bg) !important;
+  color: var(--error) !important;
+  border: 1px solid rgba(255, 95, 86, 0.3);
+}
+
+.iconBtnDeafened {
+  background-color: var(--error-bg) !important;
+  color: var(--error) !important;
+  border: 1px solid rgba(255, 95, 86, 0.3);
+}
+
+.dockDivider {
+  width: 1px;
+  height: 24px;
+  background-color: var(--outline-variant);
+  margin: 0 4px;
+}
+
+/* Primary Share Screen button */
+.shareBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: var(--radius-full);
+  background-color: var(--primary);
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 0 20px rgba(255, 77, 109, 0.45);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.shareBtn:hover {
+  background-color: var(--primary-hover);
+  box-shadow: 0 0 26px rgba(255, 77, 109, 0.6);
+  transform: translateY(-1px);
+}
+
+.shareBtn:active {
+  transform: translateY(1px);
+}
+
+.shareBtnActive {
+  background-color: var(--error);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.5);
+}
+
+.shareBtnActive:hover {
+  background-color: #ff4336;
+}
+
+/* Layout Mode Switcher */
+.modeBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+  background-color: var(--surface-container);
+  color: var(--on-surface);
+  font-size: 13px;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.modeBtn:hover {
+  background-color: var(--surface-container-high);
+}
+
+.modeIcon {
+  color: var(--secondary);
+}
+
+/* Disconnect Button */
+.leaveBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background-color: var(--error-bg);
+  color: var(--error);
+  border: 1px solid rgba(255, 95, 86, 0.25);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.leaveBtn:hover {
+  background-color: var(--error);
+  color: #ffffff;
+  transform: scale(1.08);
+}
+
+.leaveBtn:active {
+  transform: scale(0.96);
+}

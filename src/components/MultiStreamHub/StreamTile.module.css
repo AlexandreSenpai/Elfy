@@ -1,0 +1,240 @@
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  background-color: var(--surface-lowest);
+  border: 1px solid var(--outline-variant);
+  box-shadow: var(--shadow-md);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  min-height: 220px;
+  width: 100%;
+  height: 100%;
+}
+
+.tile:hover {
+  border-color: rgba(255, 77, 109, 0.5);
+  box-shadow: 0 12px 32px rgba(255, 77, 109, 0.12), var(--shadow-lg);
+}
+
+.spotlighted {
+  border-color: rgba(255, 77, 109, 0.8) !important;
+  box-shadow: 0 0 35px rgba(255, 77, 109, 0.25), var(--shadow-lg) !important;
+}
+
+.videoArea {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  background-size: cover;
+  background-position: center;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.realVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background-color: #05070a;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+.videoGradientOverlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(11, 15, 20, 0.85) 0%, transparent 45%, rgba(11, 15, 20, 0.4) 100%);
+  pointer-events: none;
+}
+
+/* Top Stream Overlay */
+.topOverlay {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.livePill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background-color: rgba(11, 15, 20, 0.92);
+  border: 1px solid var(--outline-variant);
+  pointer-events: auto;
+}
+
+.liveDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  box-shadow: 0 0 6px var(--primary);
+  animation: pulse 1.8s infinite ease-in-out;
+}
+
+.liveText {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--primary);
+  letter-spacing: 0.05em;
+}
+
+.bullet {
+  color: var(--outline);
+  font-size: 10px;
+}
+
+.resText {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--on-surface-variant);
+}
+
+.topActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  pointer-events: auto;
+}
+
+.tile:hover .topActions,
+.spotlighted .topActions {
+  opacity: 1;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background-color: rgba(11, 15, 20, 0.92);
+  border: 1px solid var(--outline-variant);
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.actionBtn:hover {
+  color: var(--on-surface);
+  background-color: var(--surface-container-high);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+
+.actionBtnActive {
+  color: var(--primary);
+  border-color: var(--primary);
+  background-color: rgba(255, 77, 109, 0.2);
+}
+
+/* Bottom Stream Overlay */
+.bottomOverlay {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.streamerTag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background-color: rgba(11, 15, 20, 0.92);
+  border: 1px solid var(--outline-variant);
+  box-shadow: var(--shadow-sm);
+}
+
+.streamerAvatarWrap {
+  position: relative;
+  width: 20px;
+  height: 20px;
+}
+
+.streamerAvatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--primary);
+}
+
+.avatarDot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--primary);
+}
+
+.streamerName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-surface);
+  white-space: nowrap;
+}
+
+.categoryPill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--secondary);
+  background-color: rgba(0, 166, 224, 0.2);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+/* Volume control */
+.volumeWrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background-color: rgba(11, 15, 20, 0.92);
+  border: 1px solid var(--outline-variant);
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+}
+
+.tile:hover .volumeWrap,
+.spotlighted .volumeWrap {
+  opacity: 1;
+}
+
+.volumeIcon {
+  font-size: 16px;
+  color: var(--primary);
+}
+
+.volumeSlider {
+  width: 64px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background-color: var(--surface-container-highest);
+  accent-color: var(--primary);
+  cursor: pointer;
+}

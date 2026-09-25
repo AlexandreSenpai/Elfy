@@ -1,0 +1,227 @@
+.fullscreenContainer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: #000000;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+.cursorHidden {
+  cursor: none;
+}
+
+.fullscreenVideoArea {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #000000;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.fullscreenVideo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background-color: #000000;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+/* Floating Controls (Auto-hide on inactivity) */
+.controlsOverlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px 32px;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 100;
+}
+
+.controlsVisible {
+  opacity: 1;
+}
+
+.controlsHidden {
+  opacity: 0;
+}
+
+/* Top Bar Overlay */
+.topBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  pointer-events: auto;
+}
+
+.streamerInfo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background-color: rgba(11, 15, 20, 0.88);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  padding: 6px 16px 6px 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.streamerAvatarWrap {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+
+.streamerAvatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid var(--primary);
+}
+
+.liveDotSmall {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  border: 1.5px solid #000;
+}
+
+.streamerMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.streamerName {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.liveBadge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background-color: rgba(255, 77, 109, 0.2);
+  border: 1px solid rgba(255, 77, 109, 0.4);
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.pulseDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  animation: pulse 1.6s infinite ease-in-out;
+}
+
+.resTag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--on-surface-variant);
+}
+
+.topActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.exitFullscreenBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background-color: rgba(11, 15, 20, 0.88);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  color: var(--on-surface);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.exitFullscreenBtn:hover {
+  background-color: var(--surface-container-high);
+  border-color: var(--primary);
+  color: #ffffff;
+  transform: scale(1.03);
+}
+
+.escHint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface-muted);
+  background-color: rgba(255, 255, 255, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* Bottom Bar Overlay */
+.bottomBar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  pointer-events: auto;
+}
+
+.volumeControl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background-color: rgba(11, 15, 20, 0.88);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-full);
+  padding: 6px 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.volumeBtn {
+  background: transparent;
+  border: none;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s;
+}
+
+.volumeBtn:hover {
+  color: var(--primary);
+}
+
+.volumeSlider {
+  width: 90px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  accent-color: var(--primary);
+  cursor: pointer;
+}

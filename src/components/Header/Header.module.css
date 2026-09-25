@@ -1,0 +1,252 @@
+.header {
+  height: 52px;
+  width: 100%;
+  padding: 0 12px 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--outline-variant);
+  background-color: rgba(11, 15, 20, 0.95);
+  backdrop-filter: blur(20px);
+  z-index: 40;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.leftSection,
+.brandWrap,
+.roomInfo,
+.roomName,
+.brandTitle,
+.slashDivider,
+.activeBadge,
+.mascotLogo {
+  pointer-events: none;
+}
+
+.rightSection {
+  pointer-events: auto;
+}
+
+.meshBadge {
+  pointer-events: none;
+}
+
+.leftSection {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brandWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mascotLogo {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(255, 77, 109, 0.35);
+  border: 1px solid rgba(255, 77, 109, 0.6);
+  overflow: hidden;
+  background-color: rgba(255, 77, 109, 0.2);
+  flex-shrink: 0;
+}
+
+.mascotImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.25);
+  object-position: top;
+}
+
+.brandTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--on-surface);
+  letter-spacing: -0.02em;
+}
+
+.slashDivider {
+  color: var(--on-surface-muted);
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.roomInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.roomName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--on-surface);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.activeBadge {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background-color: rgba(255, 77, 109, 0.15);
+  color: var(--primary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border: 1px solid rgba(255, 77, 109, 0.3);
+}
+
+/* Right Section */
+.rightSection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.meshBadge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background-color: rgba(37, 42, 51, 0.6);
+  color: var(--secondary);
+  border: 1px solid var(--outline-variant);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.pulseDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  box-shadow: 0 0 8px rgba(255, 77, 109, 0.8);
+  animation: pulse 2s infinite ease-in-out;
+}
+
+.inviteBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  background-color: var(--surface-container);
+  color: var(--on-surface);
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--outline-variant);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.inviteBtn:hover {
+  background-color: var(--surface-container-high);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+
+.inviteIcon {
+  font-size: 16px;
+  color: var(--primary);
+}
+
+.inviteText {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.copiedTag {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+.avatarWrap {
+  position: relative;
+  cursor: pointer;
+  margin-right: 4px;
+}
+
+.userAvatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid rgba(255, 77, 109, 0.6);
+  box-shadow: var(--shadow-sm);
+  background-color: rgba(255, 77, 109, 0.2);
+  transition: all 0.2s;
+}
+
+.userAvatar:hover {
+  border-color: var(--primary);
+  transform: scale(1.05);
+}
+
+.avatarImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.2);
+  object-position: top;
+}
+
+.onlineIndicator {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  border: 2px solid var(--bg-app);
+}
+
+/* Real Desktop Window Actions */
+.windowActions {
+  display: flex;
+  align-items: center;
+  border-left: 1px solid var(--outline-variant);
+  margin-left: 6px;
+  padding-left: 8px;
+}
+
+.winBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.winBtn:hover {
+  background-color: var(--surface-container-high);
+  color: var(--on-surface);
+}
+
+.winBtnClose:hover {
+  background-color: #e81123 !important;
+  color: #ffffff !important;
+}
+
+@media (max-width: 800px) {
+  .meshBadge, .roomInfo, .slashDivider {
+    display: none;
+  }
+}

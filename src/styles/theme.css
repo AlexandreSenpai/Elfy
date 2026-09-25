@@ -1,0 +1,134 @@
+:root {
+  /* Color Palette (Elfy Rose Edition) */
+  --bg-app: #0b0f14;
+  --surface-lowest: #070a0e;
+  --surface-low: #111822;
+  --surface: #0f141c;
+  --surface-container: #171d26;
+  --surface-container-high: #252a33;
+  --surface-container-highest: #2c3440;
+  --surface-bright: #343942;
+
+  --primary: #ff4d6d;
+  --primary-hover: #ff5b79;
+  --primary-dim: #ffb2b8;
+  --primary-glow: rgba(255, 77, 109, 0.4);
+  --primary-glow-soft: rgba(255, 77, 109, 0.15);
+  --primary-on: #ffffff;
+  --primary-container: #ff4d6d;
+
+  --secondary: #7bd0ff;
+  --secondary-container: #00a6e0;
+  --secondary-glow: rgba(123, 208, 255, 0.35);
+
+  --tertiary: #e3c54e;
+  --tertiary-dim: #ffe16d;
+
+  --error: #ff5f56;
+  --error-bg: rgba(255, 95, 86, 0.15);
+  --error-container: rgba(239, 68, 68, 0.25);
+  --on-error: #ffffff;
+
+  --on-surface: #dee2ee;
+  --on-surface-variant: #a7b0c0;
+  --on-surface-muted: #6b7280;
+
+  --outline: #4b5563;
+  --outline-variant: rgba(255, 255, 255, 0.08);
+  --outline-highlight: rgba(255, 77, 109, 0.4);
+
+  /* Fonts */
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  /* Spacing */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.65);
+  --shadow-dock: 0 12px 40px rgba(0, 0, 0, 0.7);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: transparent !important;
+  background: transparent !important;
+  color: var(--on-surface);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  user-select: none;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: transparent !important;
+  overflow: hidden;
+}
+
+/* Material Symbols icon helper */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  vertical-align: middle;
+}
+
+/* Scrollbar hidden across all views */
+::-webkit-scrollbar {
+  display: none;
+}
+
+/* Animation utilities */
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.92); }
+}
+
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
