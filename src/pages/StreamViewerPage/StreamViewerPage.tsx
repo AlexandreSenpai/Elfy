@@ -13,77 +13,77 @@ import {
 } from '../../utils/tauri';
 import { useProfile } from '../../hooks/useProfile';
 import { useHub } from '../../hooks/useHub';
+import { listen } from '@tauri-apps/api/event';
 
 export const StreamViewerPage: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const hubIdParam = searchParams.get('hubId') || '';
-  const autoStartParam = searchParams.get('autoStart') === 'true';
-
-  const [activeHubSlug, setActiveHubSlug] = useState<string>(hubIdParam);
-
-  const {
-    startScreenShare,
-    stopScreenShare,
-    localStream,
-    remoteStream,
-    isSharing,
-  } = useHub(activeHubSlug);
-
-  // Reacts immediately whenever search parameters change or are passed on window creation
-  useEffect(() => {
-    if (hubIdParam) {
-      setActiveHubSlug(hubIdParam);
-    }
-  }, [hubIdParam]);
-
-  useEffect(() => {
-    if (autoStartParam && !isSharing && activeHubSlug) {
-      startScreenShare();
-    }
-  }, [autoStartParam, isSharing, activeHubSlug, startScreenShare]);
-
+  const [activeHubSlug, setActiveHubSlug] = useState<string>("");
   const { profile } = useProfile();
   const [streams, setStreams] = useState<StreamItem[]>([]);
   const [fullscreenStreamId, setFullscreenStreamId] = useState<string | null>(null);
+  const [joinedAs, setJoinedAs] = useState<"owner"|"guest">("guest");
+
+  const { requestHubEntrance, entranceAccepted } = useHub(activeHubSlug, profile);
+
+  useEffect(() => {
+    const unlistenPromise = listen<{hubId: string; autoStart: boolean, joinedAs: "owner" | "guest"}>(
+      'request-start-stream',
+      (event) => {
+        console.log(event);
+        setActiveHubSlug(event.payload.hubId);
+        setJoinedAs(event.payload.joinedAs);
+        // startScreenShare();
+      }
+    )
+
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    }
+  }, []);
+
+  useEffect(() => {
+    if(joinedAs === "guest") {
+      requestHubEntrance();
+    }
+  }, [joinedAs])
 
   // Dynamically attach active local and remote WebRTC streams to the tile grid
-  const displayStreams = useMemo(() => {
-    let list = [...streams];
+  // const displayStreams = useMemo(() => {
+  //   let list = [...streams];
 
-    if (localStream) {
-      const localItem: StreamItem = {
-        id: 'local-screen-share',
-        name: `${profile.nickname}'s Screen`,
-        tag: 'My Screen (Live)',
-        resolution: '1080p',
-        fps: 60,
-        avatarUrl: profile.avatarUrl,
-        isLive: true,
-        volume: 100,
-        isLocal: true
-      };
-      list = [localItem, ...list.filter((s) => s.id !== 'local-screen-share')];
-    } else {
-      list = list.filter((s) => s.id !== 'local-screen-share');
-    }
+  //   if (localStream) {
+  //     const localItem: StreamItem = {
+  //       id: 'local-screen-share',
+  //       name: `${profile.nickname}'s Screen`,
+  //       tag: 'My Screen (Live)',
+  //       resolution: '1080p',
+  //       fps: 60,
+  //       avatarUrl: profile.avatarUrl,
+  //       isLive: true,
+  //       volume: 100,
+  //       isLocal: true
+  //     };
+  //     list = [localItem, ...list.filter((s) => s.id !== 'local-screen-share')];
+  //   } else {
+  //     list = list.filter((s) => s.id !== 'local-screen-share');
+  //   }
 
-    if (remoteStream) {
-      const remoteItem: StreamItem = {
-        id: 'remote-peer-stream',
-        name: 'Peer Screen',
-        tag: 'Live Broadcast',
-        resolution: '1080p',
-        fps: 60,
-        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
-        isLive: true,
-        volume: 100,
-        isLocal: false
-      };
-      list = [remoteItem, ...list.filter((s) => s.id !== 'remote-peer-stream')];
-    }
+  //   if (remoteStream) {
+  //     const remoteItem: StreamItem = {
+  //       id: 'remote-peer-stream',
+  //       name: 'Peer Screen',
+  //       tag: 'Live Broadcast',
+  //       resolution: '1080p',
+  //       fps: 60,
+  //       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80',
+  //       isLive: true,
+  //       volume: 100,
+  //       isLocal: false
+  //     };
+  //     list = [remoteItem, ...list.filter((s) => s.id !== 'remote-peer-stream')];
+  //   }
 
-    return list;
-  }, [streams, localStream, remoteStream, profile]);
+  //   return list;
+  // }, [streams, localStream, remoteStream, profile]);
 
   const handleUpdateVolume = (id: string, vol: number) => {
     setStreams((prev) =>
@@ -116,38 +116,38 @@ export const StreamViewerPage: React.FC = () => {
   };
 
   // Dedicated video-only fullscreen mode
-  const fullscreenStream = fullscreenStreamId
-    ? displayStreams.find((s) => s.id === fullscreenStreamId) || displayStreams[0]
-    : null;
+  // const fullscreenStream = fullscreenStreamId
+  //   ? displayStreams.find((s) => s.id === fullscreenStreamId) || displayStreams[0]
+  //   : null;
 
-  if (fullscreenStream) {
-    const fullscreenMedia = fullscreenStream.isLocal
-      ? localStream
-      : fullscreenStream.id === 'remote-peer-stream'
-      ? remoteStream
-      : null;
+  // if (fullscreenStream) {
+  //   const fullscreenMedia = fullscreenStream.isLocal
+  //     ? localStream
+  //     : fullscreenStream.id === 'remote-peer-stream'
+  //     ? remoteStream
+  //     : null;
 
-    return (
-      <FullscreenStreamViewer
-        stream={fullscreenStream}
-        mediaStream={fullscreenMedia}
-        onExitFullscreen={handleExitFullscreen}
-        onVolumeChange={(vol) => handleUpdateVolume(fullscreenStream.id, vol)}
-      />
-    );
-  }
+  //   return (
+  //     <FullscreenStreamViewer
+  //       stream={fullscreenStream}
+  //       mediaStream={fullscreenMedia}
+  //       onExitFullscreen={handleExitFullscreen}
+  //       onVolumeChange={(vol) => handleUpdateVolume(fullscreenStream.id, vol)}
+  //     />
+  //   );
+  // }
 
   return (
     <div className={styles.streamContainer}>
       <Header
         profile={profile}
-        activeStreamsCount={displayStreams.length}
+        activeStreamsCount={0}
         onCloseStream={handleCloseStream}
         onOpenProfile={handleOpenProfileWindow}
         roomTitle={activeHubSlug || 'The Treehouse'}
       />
       <div className={styles.streamViewArea}>
-        <MultiStreamHub
+        {/* <MultiStreamHub
           streams={displayStreams}
           profile={profile}
           mediaStream={localStream}
@@ -157,7 +157,7 @@ export const StreamViewerPage: React.FC = () => {
           onStopShare={stopScreenShare}
           onUpdateVolume={handleUpdateVolume}
           onToggleFullscreen={handleEnterFullscreen}
-        />
+        /> */}
       </div>
     </div>
   );

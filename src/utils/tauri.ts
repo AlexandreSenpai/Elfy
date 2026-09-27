@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { emit } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export const isTauri = (): boolean => {
@@ -27,6 +28,7 @@ export const closeRegisterWindowTauri = async (): Promise<void> => {
 
 export const openStreamWindowTauri = async (hubId?: string, autoStart: boolean = false): Promise<void> => {
   await safeInvoke('open_stream_window', { hubId, autoStart });
+  await emit('request-start-stream', { hubId, autoStart });
 };
 
 export const closeStreamWindowTauri = async (): Promise<void> => {

@@ -26,7 +26,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
   const myHub = `elfy/hub/${profile.nickname}${profile.peerTag}`;
 
   const handleCopyLink = () => {
-    navigator.clipboard?.writeText(`elfy/hub/${profile.nickname}${profile.peerTag}`).catch(() => {});
+    navigator.clipboard?.writeText(myHub).catch(() => {});
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -39,13 +39,15 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
 
   const handleJoinByCode = (e: React.FormEvent) => {
     e.preventDefault();
+    
     if (!joinCode.trim()) return;
 
+
     const newHub: FriendHub = {
-      id: `hub-${Date.now()}`,
+      id: joinCode.trim(),
       name: joinCode.trim(),
       status: 'idle',
-      description: 'Newly joined peer hub · Ready to cast',
+      description: '',
       previewImage: 'https://lh3.googleusercontent.com/aida-public/AB6AXuB4ADxW8ZnRZzNLCb1Y8iSB01mH-LJbcbQQw_sMRjD-q3nimRXiRmnNqdePhnrO_Hb9RNZXKD3DCVoQ4VRD3HDoEIrARON2pAPJu8Z5rQjW3lHApg0jWzNXMn0DEfheG_JTfFm4SuAexfX_BwVCy-OxRGjrq4M5WPmXi3N4zXtVCqFnZsWENgtAX7B5gyiTw-IbaAz9QAAMJUKPf5t5DMkm5vZ-jjWs3JGfw8yj5TMl18i0UtRCBv2HVw',
       peers: 1,
       latency: 19,

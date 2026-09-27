@@ -18,12 +18,6 @@ export const FriendHubsPage: React.FC<FriendHubsPageProps> = () => {
   const handleOpenHub = async (hubId: string, autoStart: boolean = false) => {
     if (isTauri()) {
       await openStreamWindowTauri(hubId, autoStart);
-    } else {
-      window.open(
-        `/#/stream?hubId=${encodeURIComponent(hubId)}&autoStart=${autoStart}`,
-        '_blank',
-        'width=1280,height=720,resizable=yes'
-      );
     }
   };
 
