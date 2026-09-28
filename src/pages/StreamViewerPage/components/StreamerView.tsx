@@ -48,13 +48,13 @@ export const StreamerView: React.FC<StreamerViewProps> = ({
     if (!normalizedHub) return;
     broker.subscribeTo(normalizedHub);
 
-    const unlisten = broker.listenToMessages(async (message: Buffer, topic?: string) => {
+    const unlisten = broker.listenToMessages(async (message: Buffer) => {
       try {
         const data = JSON.parse(message.toString());
         if (data.type === 'answer' && data.sdp) {
-          await handleOfferAnswer(topic || normalizedHub, data.sdp);
+          await handleOfferAnswer(data.sdp);
         } else if (data.type === 'candidate' && (data.candidate || data.data)) {
-          await handleCandidate(topic || normalizedHub, data.candidate || data.data);
+          await handleCandidate(data.candidate || data.data);
         }
       } catch (err) {
         console.error('[StreamerView] Error processing signaling message:', err);

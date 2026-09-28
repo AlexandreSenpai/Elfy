@@ -56,11 +56,12 @@ export const ViewerView: React.FC<ViewerViewProps> = ({
     const guestInbox = getGuestInboxTopic(normalizedHub, guestTagSafe);
     broker.subscribeTo(guestInbox);
 
-    const unlisten = broker.listenToMessages(async (message: Buffer, topic?: string) => {
+    const unlisten = broker.listenToMessages(async (message: Buffer) => {
       try {
         const data = JSON.parse(message.toString());
         if (data.type === 'offer_created' && data.sdp) {
-          await acceptOffer(topic || normalizedHub, data.sdp);
+          // Send the answer back to the main host hub topic!
+          await acceptOffer(normalizedHub, data.sdp);
         } else if (data.type === 'candidate' && (data.candidate || data.data)) {
           await handleCandidate(data.candidate || data.data);
         }
