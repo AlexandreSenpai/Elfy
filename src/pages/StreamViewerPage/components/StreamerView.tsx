@@ -39,7 +39,9 @@ export const StreamerView: React.FC<StreamerViewProps> = ({
   } = useHubKnocking(normalizedHub, profile, 'owner');
 
   const handleKnockingAccept = useCallback(async (knock: PendingKnock) => {
+    // 1. Remove from pendingKnocks state first to prevent duplicate clicks/renders
     await acceptKnock(knock);
+    // 2. Dispatch offer
     await createOffer(knock);
   }, [acceptKnock, createOffer]);
 

@@ -13,6 +13,14 @@ export const useViewerConnection = () => {
     hostReplyTopic: string,
     offerSdp: RTCSessionDescriptionInit
   ) => {
+    // If we already have a live connection, don't destroy it on duplicate message
+    if (pcRef.current && (pcRef.current.connectionState === 'connected' || pcRef.current.signalingState !== 'closed')) {
+      if (pcRef.current.remoteDescription) {
+        console.warn('[Viewer] Connection already negotiated or negotiating. Ignoring duplicate offer.');
+        return;
+      }
+    }
+
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
 

@@ -33,11 +33,19 @@ export const useStreamerConnection = () => {
 
   const createOffer = useCallback(async (acceptedKnock: PendingKnock) => {
     if (!stream.current) {
-      console.error("Couldn't create offer: local stream is not active.");
+      console.error("Cannot create offer: local stream is not active.");
       return;
     }
 
     const guestInbox = getGuestInboxTopic(acceptedKnock.hubTopic, acceptedKnock.peerIdSafe);
+
+    // If a connection for this guest already exists and is active, do not overwrite it!
+    const existingPC = peerConnections.current.get(guestInbox);
+    if (existingPC && existingPC.connectionState !== 'closed' && existingPC.connectionState !== 'failed') {
+      console.warn(`[Streamer] PC for ${guestInbox} already exists in state: ${existingPC.connectionState}. Skipping duplicate offer.`);
+      return;
+    }
+
     const peerConnection = new RTCPeerConnection({ iceServers: ICEServers });
     peerConnections.current.set(guestInbox, peerConnection);
 
@@ -50,20 +58,20 @@ export const useStreamerConnection = () => {
       if (!event.candidate) return;
       broker.dispatchMessage<FoundICECandidate>(guestInbox, {
         type: 'candidate',
-        candidate: event.candidate
+        candidate: event.candidate,
       });
     };
 
     const offer = await peerConnection.createOffer({
       offerToReceiveAudio: true,
-      offerToReceiveVideo: true
+      offerToReceiveVideo: true,
     });
     await peerConnection.setLocalDescription(offer);
 
     // Dispatch directly to the guest's inbox topic
     await broker.dispatchMessage<CreatedOffer>(guestInbox, {
       type: 'offer_created',
-      sdp: offer
+      sdp: offer,
     });
   }, [broker]);
 
