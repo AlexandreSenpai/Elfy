@@ -39,3 +39,5 @@ export interface FriendHub {
   audioFormat: string;
   spatialStereo?: boolean;
 }
+
+export * from './knock';

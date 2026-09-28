@@ -26,9 +26,13 @@ export const closeRegisterWindowTauri = async (): Promise<void> => {
   await safeInvoke('close_register_window');
 };
 
-export const openStreamWindowTauri = async (hubId?: string, autoStart: boolean = false): Promise<void> => {
+export const openStreamWindowTauri = async (
+  hubId?: string,
+  autoStart: boolean = false,
+  joinedAs?: 'owner' | 'guest'
+): Promise<void> => {
   await safeInvoke('open_stream_window', { hubId, autoStart });
-  await emit('request-start-stream', { hubId, autoStart });
+  await emit('request-start-stream', { hubId, autoStart, joinedAs });
 };
 
 export const closeStreamWindowTauri = async (): Promise<void> => {

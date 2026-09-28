@@ -15,4 +15,32 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.statusBox {
+  max-width: 400px;
+  width: 100%;
+  padding: 24px;
+  background: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  border-radius: var(--radius-lg);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.statusBox h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.statusBox p {
+  font-size: 13px;
+  color: var(--on-surface-variant);
 }

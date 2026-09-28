@@ -1,0 +1,72 @@
+.overlay {
+  position: fixed;
+  top: 56px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+  width: 100%;
+}
+
+.alertCard {
+  background: var(--surface-container-high);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--primary);
+}
+
+.name {
+  font-size: 13px;
+  color: var(--on-surface);
+  margin-top: 2px;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.allowBtn {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  background: #10b981;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.allowBtn:hover {
+  background: #059669;
+}
+
+.declineBtn {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  background: transparent;
+  color: var(--on-surface-variant);
+  border: 1px solid var(--outline);
+  cursor: pointer;
+}
+
+.declineBtn:hover {
+  color: var(--on-surface);
+  border-color: var(--on-surface);
+}
