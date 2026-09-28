@@ -18,33 +18,38 @@ export const StreamViewerPage: React.FC = () => {
   const urlJoinedAs = searchParams.get('joinedAs') as 'owner' | 'guest' | null;
 
   const [activeHubSlug, setActiveHubSlug] = useState<string>(urlHubId);
+  const [autoStart, setAutoStart] = useState<boolean>(urlAutoStart);
   const [joinedAs, setJoinedAs] = useState<'owner' | 'guest'>(() => {
     if (urlJoinedAs) return urlJoinedAs;
-    if (urlAutoStart) return 'owner';
     if (urlHubId && isHubOwner(urlHubId, profile)) return 'owner';
     return 'guest';
   });
 
   useEffect(() => {
-    const unlistenPromise = listen<{
+    let unlisten: (() => void) | undefined;
+
+    listen<{
       hubId: string;
       autoStart?: boolean;
       joinedAs?: 'owner' | 'guest';
     }>('request-start-stream', (event) => {
-      if (event.payload.hubId) setActiveHubSlug(event.payload.hubId);
+      const targetHub = event.payload.hubId || '';
+      setActiveHubSlug(targetHub);
+      setAutoStart(Boolean(event.payload.autoStart));
+
       if (event.payload.joinedAs) {
         setJoinedAs(event.payload.joinedAs);
-      } else if (event.payload.autoStart) {
-        setJoinedAs('owner');
-      } else if (event.payload.hubId && isHubOwner(event.payload.hubId, profile)) {
+      } else if (targetHub && isHubOwner(targetHub, profile)) {
         setJoinedAs('owner');
       } else {
         setJoinedAs('guest');
       }
+    }).then((fn) => {
+      unlisten = fn;
     });
 
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
+      if (unlisten) unlisten();
     };
   }, [profile]);
 
@@ -73,12 +78,11 @@ export const StreamViewerPage: React.FC = () => {
         onOpenProfile={handleOpenProfileWindow}
         roomTitle={activeHubSlug || 'Elfy Hub'}
       />
-
       {joinedAs === 'owner' ? (
         <StreamerView
           hubTopic={activeHubSlug}
           profile={profile}
-          autoStart={urlAutoStart}
+          autoStart={autoStart}
         />
       ) : (
         <ViewerView

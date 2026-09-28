@@ -24,7 +24,9 @@ export const formatFullPeerTag = (nickname: string, peerTag: string): string => 
  * into the canonical MQTT hub topic base: "elfy/hub/Mochi_2sintd".
  */
 export const normalizeHubTopic = (rawHub: string): string => {
-  if (!rawHub) return 'elfy/hub/unknown';
+  if (!rawHub || !rawHub.trim() || rawHub === 'elfy/hub/unknown') {
+    return '';
+  }
   let cleaned = rawHub.trim().replace(/#/g, '_');
   if (!cleaned.startsWith('elfy/hub/')) {
     // If it started with / or hub/, strip first
@@ -39,7 +41,8 @@ export const normalizeHubTopic = (rawHub: string): string => {
  * E.g., "elfy/hub/Mochi_2sintd/knock"
  */
 export const getKnockTopic = (hubInput: string): string => {
-  return `${normalizeHubTopic(hubInput)}/knock`;
+  const normalized = normalizeHubTopic(hubInput);
+  return normalized ? `${normalized}/knock` : '';
 };
 
 /**
@@ -47,8 +50,10 @@ export const getKnockTopic = (hubInput: string): string => {
  * E.g., "elfy/hub/Mochi_2sintd/peer/Luna_eGkjL"
  */
 export const getGuestInboxTopic = (hubInput: string, guestTagSafe: string): string => {
+  const normalized = normalizeHubTopic(hubInput);
+  if (!normalized) return '';
   const safeGuest = guestTagSafe.replace(/#/g, '_').trim();
-  return `${normalizeHubTopic(hubInput)}/peer/${safeGuest}`;
+  return `${normalized}/peer/${safeGuest}`;
 };
 
 /**

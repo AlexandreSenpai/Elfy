@@ -39,7 +39,7 @@ export const ViewerView: React.FC<ViewerViewProps> = ({
     cancelKnock
   } = useHubKnocking(normalizedHub, profile, 'guest');
 
-  // Automatically request entrance if idle
+  // Only knock when a non-empty normalized hub topic exists
   useEffect(() => {
     if (normalizedHub && knockStatus === 'idle') {
       requestHubEntrance();

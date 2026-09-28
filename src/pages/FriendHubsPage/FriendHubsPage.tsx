@@ -16,11 +16,16 @@ export const FriendHubsPage: React.FC<FriendHubsPageProps> = () => {
   const [isSharing, setIsSharing] = useState(false);
 
   const handleOpenHub = async (hubId: string, autoStart: boolean = false) => {
+    const isMine =
+      hubId.includes(profile.nickname) &&
+      hubId.includes(profile.peerTag.replace('#', ''));
+    const joinedAs: 'owner' | 'guest' = isMine ? 'owner' : 'guest';
+
     if (isTauri()) {
-      await openStreamWindowTauri(hubId, autoStart);
+      await openStreamWindowTauri(hubId, autoStart, joinedAs);
     } else {
       window.open(
-        `/#/stream?hubId=${encodeURIComponent(hubId)}&autoStart=${autoStart}`,
+        `/#/stream?hubId=${encodeURIComponent(hubId)}&autoStart=${autoStart}&joinedAs=${joinedAs}`,
         '_blank',
         'width=1280,height=720'
       );

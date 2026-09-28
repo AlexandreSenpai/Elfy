@@ -25,7 +25,7 @@ export const useHubKnocking = (
   const [pendingKnocks, setPendingKnocks] = useState<PendingKnock[]>([]);
 
   const requestHubEntrance = useCallback(async () => {
-    if (!hubId || !profile || joinedAs !== 'guest') return;
+    if (!normalizedHub || !profile || joinedAs !== 'guest') return;
 
     const guestTagSafe = toSafePeerTag(profile.nickname, profile.peerTag);
     const inbox = getGuestInboxTopic(normalizedHub, guestTagSafe);
@@ -43,8 +43,7 @@ export const useHubKnocking = (
       avatarUrl: profile.avatarUrl,
       timestamp: Date.now()
     });
-
-  }, [hubId, profile, joinedAs, normalizedHub, broker]);
+  }, [normalizedHub, profile, joinedAs, broker]);
 
   const cancelKnock = useCallback(() => {
     setKnockStatus('idle');
@@ -111,21 +110,23 @@ export const useHubKnocking = (
 
     return unlisten;
   }
-  // Listen to incoming messages for knocks or decisions
   useEffect(() => {
-    if (!hubId) return;
+    if (!normalizedHub) return;
+
+    let unlistenPromise: Promise<(() => void) | undefined> | undefined;
 
     if (joinedAs === 'owner') {
-      return () => {
-        hubOwnerKnockHandler();
-      }
+      unlistenPromise = hubOwnerKnockHandler();
     } else {
-      return () => {
-        hubGuestKnockHandler();
-      }
+      unlistenPromise = hubGuestKnockHandler();
     }
 
-  }, [broker, hubId, joinedAs, normalizedHub]);
+    return () => {
+      unlistenPromise?.then((unlisten) => {
+        if (unlisten) unlisten();
+      });
+    };
+  }, [broker, joinedAs, normalizedHub]);
 
   return {
     hostInfo,
