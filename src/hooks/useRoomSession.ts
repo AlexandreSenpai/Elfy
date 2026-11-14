@@ -1199,7 +1199,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       hubTopic: hubRef.current,
     };
 
-    playKnockSound();
+    playKnockSound(payload.peerIdSafe);
     showKnockNotification(payload.displayName, payload.peerTag);
 
     setPendingKnocks((prev) => [

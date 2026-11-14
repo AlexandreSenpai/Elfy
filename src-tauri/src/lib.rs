@@ -325,38 +325,86 @@ fn acquire_single_instance_lock() -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn spawn_windows_toast_notification(title: String, body: String) {
+fn ensure_windows_aumid_registered() {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+    std::thread::spawn(|| {
+        let key = r"HKCU\Software\Classes\AppUserModelId\com.alexandresenpai.elfy";
+        let _ = std::process::Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["add", key, "/v", "DisplayName", "/t", "REG_SZ", "/d", "Elfy", "/f"])
+            .output();
+        let _ = std::process::Command::new("reg")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["add", key, "/v", "ShowInSettings", "/t", "REG_DWORD", "/d", "1", "/f"])
+            .output();
+        if let Ok(exe) = std::env::current_exe() {
+            let icon_uri = format!("{},0", exe.to_string_lossy());
+            let _ = std::process::Command::new("reg")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args(["add", key, "/v", "IconUri", "/t", "REG_SZ", "/d", &icon_uri, "/f"])
+                .output();
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_windows_toast_notification(title: String, body: String) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let exe_path = std::env::current_exe()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
     std::thread::spawn(move || {
         let script = r#"
-$ErrorActionPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 $title = $env:ELFY_NOTIFY_TITLE
 $body = $env:ELFY_NOTIFY_BODY
+$exePath = $env:ELFY_EXE_PATH
 if ([string]::IsNullOrWhiteSpace($title)) { $title = 'Elfy' }
 $shown = $false
 try {
   [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
   [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-  $escapedTitle = [System.Security.SecurityElement]::Escape($title)
-  $escapedBody = [System.Security.SecurityElement]::Escape($body)
-  $xmlStr = "<toast><visual><binding template='ToastGeneric'><text>$escapedTitle</text><text>$escapedBody</text></binding></visual><audio silent='true'/></toast>"
-  $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-  $xml.LoadXml($xmlStr)
+  $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+  $textNodes = $xml.GetElementsByTagName('text')
+  $textNodes.Item(0).AppendChild($xml.CreateTextNode($title)) | Out-Null
+  $textNodes.Item(1).AppendChild($xml.CreateTextNode($body)) | Out-Null
   $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Elfy').Show($toast)
-  $shown = $true
+  foreach ($aumid in @('com.alexandresenpai.elfy', '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe')) {
+    try {
+      [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid).Show($toast)
+      $shown = $true
+      break
+    } catch {}
+  }
 } catch {
   $shown = $false
 }
 if (-not $shown) {
   Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
   $notify = New-Object System.Windows.Forms.NotifyIcon
-  $notify.Icon = [System.Drawing.SystemIcons]::Information
+  $icon = $null
+  if (-not [string]::IsNullOrWhiteSpace($exePath) -and (Test-Path -LiteralPath $exePath)) {
+    try { $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($exePath) } catch { $icon = $null }
+  }
+  if ($null -eq $icon) {
+    $icon = [System.Drawing.SystemIcons]::Information
+  }
+  $notify.Icon = $icon
+  $notify.Text = 'Elfy'
   $notify.Visible = $true
-  $notify.ShowBalloonTip(5000, $title, $body, [System.Windows.Forms.ToolTipIcon]::Info)
-  Start-Sleep -Milliseconds 5200
+  $notify.ShowBalloonTip(6000, $title, $body, [System.Windows.Forms.ToolTipIcon]::Info)
+  $deadline = [DateTime]::UtcNow.AddSeconds(6)
+  while ([DateTime]::UtcNow -lt $deadline) {
+    [System.Windows.Forms.Application]::DoEvents()
+    Start-Sleep -Milliseconds 100
+  }
+  $notify.Visible = $false
   $notify.Dispose()
 }
 "#;
@@ -366,6 +414,7 @@ if (-not $shown) {
             .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script])
             .env("ELFY_NOTIFY_TITLE", title)
             .env("ELFY_NOTIFY_BODY", body)
+            .env("ELFY_EXE_PATH", exe_path)
             .output();
     });
 }
@@ -396,7 +445,15 @@ fn show_knock_notification(
     spawn_windows_toast_notification(title, body);
 
     #[cfg(not(target_os = "windows"))]
-    let _ = (title, body);
+    {
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app
+            .notification()
+            .builder()
+            .title(&title)
+            .body(&body)
+            .show();
+    }
 
     Ok(())
 }
@@ -448,7 +505,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_machine_uid::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            ensure_windows_aumid_registered();
             db::init_db(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
             system_monitor::init_monitor();
             configure_main_window(app).map_err(Box::<dyn std::error::Error>::from)?;

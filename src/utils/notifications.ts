@@ -1,3 +1,4 @@
+import { sendNotification } from '@tauri-apps/plugin-notification';
 import { isTauri, showKnockNotificationTauri } from './tauri';
 
 export interface RecordedKnockNotification {
@@ -13,6 +14,40 @@ interface NotificationWindowGlobals {
   webkitAudioContext?: typeof AudioContext;
 }
 
+const KNOCK_DEDUP_STORAGE_KEY = 'elfy_last_knock_alert';
+const KNOCK_DEDUP_WINDOW_MS = 1200;
+const recentKnockSoundMap = new Map<string, number>();
+const recentKnockNotifyMap = new Map<string, number>();
+
+const shouldDeduplicateKnock = (
+  kind: 'sound' | 'notify',
+  key: string,
+  localMap: Map<string, number>
+): boolean => {
+  const now = Date.now();
+  const normalizedKey = `${kind}:${key.trim().toLowerCase() || 'unknown'}`;
+  const lastLocal = localMap.get(normalizedKey) ?? 0;
+  if (now - lastLocal < KNOCK_DEDUP_WINDOW_MS) {
+    return true;
+  }
+  localMap.set(normalizedKey, now);
+
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const storageKey = `${KNOCK_DEDUP_STORAGE_KEY}_${normalizedKey}`;
+      const prev = Number(localStorage.getItem(storageKey) ?? '0');
+      if (Number.isFinite(prev) && now - prev < KNOCK_DEDUP_WINDOW_MS) {
+        return true;
+      }
+      localStorage.setItem(storageKey, String(now));
+    } catch {
+      // Ignore localStorage quota/access errors.
+    }
+  }
+
+  return false;
+};
+
 const getAudioContextConstructor = (): typeof AudioContext | null => {
   if (typeof window === 'undefined') return null;
   const win = window as unknown as NotificationWindowGlobals;
@@ -24,8 +59,12 @@ let sharedAudioCtx: AudioContext | null = null;
 /**
  * Plays a gentle two-tone chime to alert the hub owner of an incoming knock request.
  */
-export const playKnockSound = (): void => {
+export const playKnockSound = (dedupKey?: string): void => {
   if (typeof window === 'undefined') return;
+  if (dedupKey && shouldDeduplicateKnock('sound', dedupKey, recentKnockSoundMap)) {
+    return;
+  }
+
   const win = window as unknown as NotificationWindowGlobals;
   win.__ELFY_KNOCK_SOUNDS_PLAYED__ = (win.__ELFY_KNOCK_SOUNDS_PLAYED__ ?? 0) + 1;
 
@@ -73,6 +112,10 @@ export const playKnockSound = (): void => {
 export const showKnockNotification = (displayName: string, peerTag: string): void => {
   const cleanName = displayName.trim() || 'Someone';
   const cleanTag = peerTag.trim();
+  if (shouldDeduplicateKnock('notify', cleanTag || cleanName, recentKnockNotifyMap)) {
+    return;
+  }
+
   const title = 'Elfy — Knock Request';
   const body = cleanTag
     ? `${cleanName} (${cleanTag}) wants to join your Hub`
@@ -92,7 +135,13 @@ export const showKnockNotification = (displayName: string, peerTag: string): voi
   }
 
   if (isTauri()) {
-    void showKnockNotificationTauri(cleanName, cleanTag);
+    void showKnockNotificationTauri(cleanName, cleanTag).catch(() => {
+      try {
+        sendNotification({ title, body });
+      } catch {
+        // Ignore secondary plugin error.
+      }
+    });
     return;
   }
 

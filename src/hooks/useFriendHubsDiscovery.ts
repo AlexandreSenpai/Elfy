@@ -11,14 +11,18 @@ import {
   SignalingEnvelopeDto,
   UserProfile,
 } from '../domain/dtos';
+import { DEFAULT_USER_PROFILE } from '../data/mockData';
 import { sanitizeHubCode } from '../domain/validators';
 import {
   extractHostFromHub,
+  formatFullPeerTag,
   getGuestInboxTopic,
+  getKnockTopic,
   getProbeTopic,
   normalizeHubTopic,
   toSafePeerTag,
 } from '../utils/hubTopics';
+import { playKnockSound, showKnockNotification } from '../utils/notifications';
 import { isTauri, restoreStreamWindowTauri } from '../utils/tauri';
 
 export interface AddFriendHubMeta {
@@ -396,6 +400,47 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
     inboxUnsubMapRef.current.clear();
     void refreshHubsStatus();
   }, [localPeerIdSafe, refreshHubsStatus]);
+
+  // Listen for knocks on the owner's own Hub even while the Watch Room window is closed.
+  useEffect(() => {
+    if (!profile.machineHash && profile.peerTag === DEFAULT_USER_PROFILE.peerTag) {
+      return;
+    }
+
+    const myHub = `elfy/hub/${formatFullPeerTag(profile.nickname, profile.peerTag)}`;
+    const myKnockTopic = getKnockTopic(myHub);
+    if (!myKnockTopic) return;
+
+    let active = true;
+    let unsub: (() => void) | null = null;
+
+    const subscribeOwnerKnocks = async (): Promise<void> => {
+      try {
+        await signalingTransport.connect();
+        const fn = await signalingTransport.subscribeTopic(myKnockTopic, (envelope) => {
+          if (envelope.payload.type !== 'knock_request') return;
+          const payload = envelope.payload;
+          if (payload.peerIdSafe === localPeerIdRef.current) return;
+          playKnockSound(payload.peerIdSafe);
+          showKnockNotification(payload.displayName, payload.peerTag);
+        });
+        if (!active) {
+          fn();
+          return;
+        }
+        unsub = fn;
+      } catch (err) {
+        console.warn('[useFriendHubsDiscovery] Failed to subscribe own knock topic:', err);
+      }
+    };
+
+    void subscribeOwnerKnocks();
+
+    return () => {
+      active = false;
+      unsub?.();
+    };
+  }, [profile.machineHash, profile.peerTag]);
 
   return {
     hubs,

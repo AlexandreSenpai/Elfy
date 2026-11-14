@@ -6,6 +6,10 @@
   "permissions": [
     "core:default",
     "opener:default",
+    "notification:default",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
     "machine-uid:allow-get-machine-uid",
     "machine-uid:default",
     "core:window:allow-start-dragging",
