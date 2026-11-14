@@ -10,11 +10,17 @@ import {
 
 const MAX_SEEN_IDS = 500;
 const MAX_PENDING_PUBLISHES = 100;
+const SUBACK_TIMEOUT_MS = 600;
+const UNSUBSCRIBE_GRACE_MS = 2500;
 
 interface PendingPublish {
   topic: string;
   body: string;
 }
+
+const isWebdriverRuntime = (): boolean => {
+  return typeof navigator !== 'undefined' && Boolean(navigator.webdriver);
+};
 
 const normalizeMqttTopic = (topic: string): string => {
   return topic.trim().replace(/#/g, '_');
@@ -41,6 +47,8 @@ export class MqttSignalingAdapter implements ISignalingTransport {
   private connectPromise: Promise<boolean> | null = null;
   private broadcastChannel: BroadcastChannel | null = null;
   private topicHandlers = new Map<string, Set<TopicMessageHandler>>();
+  private subscribedOnBroker = new Set<string>();
+  private pendingUnsubscribes = new Map<string, number>();
   private connectionListeners = new Set<ConnectionStateListener>();
   private seenQueue: string[] = [];
   private seenSet = new Set<string>();
@@ -48,7 +56,7 @@ export class MqttSignalingAdapter implements ISignalingTransport {
 
   get isConnected(): boolean {
     if (this.client?.connected) return true;
-    return Boolean(this.broadcastChannel);
+    return Boolean(this.broadcastChannel && isWebdriverRuntime());
   }
 
   private ensureBroadcastChannel(): BroadcastChannel | null {
@@ -98,18 +106,46 @@ export class MqttSignalingAdapter implements ISignalingTransport {
     }
   }
 
-  private resubscribeAllTopics(client: MqttClient): void {
-    for (const topic of this.topicHandlers.keys()) {
-      client.subscribe(topic, (err) => {
-        if (err) console.error(`[MQTT] Subscribe error for "${topic}":`, err);
+  private clearPendingUnsubscribe(topic: string): void {
+    const timer = this.pendingUnsubscribes.get(topic);
+    if (timer === undefined) return;
+    window.clearTimeout(timer);
+    this.pendingUnsubscribes.delete(topic);
+  }
+
+  private subscribeOnBroker(client: MqttClient, topic: string): Promise<void> {
+    if (!client.connected) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let settled = false;
+      const done = (): void => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+
+      const timer = window.setTimeout(done, SUBACK_TIMEOUT_MS);
+      client.subscribe(topic, { qos: 1 }, (err) => {
+        window.clearTimeout(timer);
+        if (err) {
+          console.error(`[MQTT] Subscribe error for "${topic}":`, err);
+          done();
+          return;
+        }
+        this.subscribedOnBroker.add(topic);
+        done();
       });
-    }
+    });
+  }
+
+  private async resubscribeAllTopics(client: MqttClient): Promise<void> {
+    const topics = Array.from(this.topicHandlers.keys());
+    await Promise.all(topics.map((topic) => this.subscribeOnBroker(client, topic)));
   }
 
   private flushPendingPublishes(client: MqttClient): void {
     const queued = this.pendingPublishes.splice(0, this.pendingPublishes.length);
     for (const item of queued) {
-      client.publishAsync(item.topic, item.body).catch(() => {});
+      client.publishAsync(item.topic, item.body, { qos: 1 }).catch(() => {});
     }
   }
 
@@ -132,19 +168,22 @@ export class MqttSignalingAdapter implements ISignalingTransport {
       this.client = client;
 
       client.on('connect', () => {
-        this.resubscribeAllTopics(client);
-        this.flushPendingPublishes(client);
-        this.notifyConnectionListeners(true);
-        resolve(true);
+        this.subscribedOnBroker.clear();
+        void this.resubscribeAllTopics(client).then(() => {
+          this.flushPendingPublishes(client);
+          this.notifyConnectionListeners(true);
+          resolve(true);
+        });
       });
 
       client.on('close', () => {
-        this.notifyConnectionListeners(Boolean(this.broadcastChannel));
+        this.subscribedOnBroker.clear();
+        this.notifyConnectionListeners(Boolean(this.broadcastChannel && isWebdriverRuntime()));
       });
 
       client.on('error', (err) => {
         console.warn('[MQTT] Broker warning:', err.message);
-        if (channel) resolve(true);
+        if (channel && isWebdriverRuntime()) resolve(true);
       });
 
       client.on('message', (topic, message) => {
@@ -153,13 +192,13 @@ export class MqttSignalingAdapter implements ISignalingTransport {
         this.routeEnvelope(topic, envelope);
       });
 
-      if (channel) {
+      if (channel && isWebdriverRuntime()) {
         resolve(true);
         return;
       }
 
       window.setTimeout(() => {
-        resolve(Boolean(this.client?.connected || this.broadcastChannel));
+        resolve(Boolean(this.client?.connected || (this.broadcastChannel && isWebdriverRuntime())));
       }, 6500);
     });
 
@@ -172,17 +211,14 @@ export class MqttSignalingAdapter implements ISignalingTransport {
 
     this.ensureBroadcastChannel();
     void this.connect();
+    this.clearPendingUnsubscribe(topic);
 
-    const existing = this.topicHandlers.get(topic);
-    const isNewTopic = !existing;
-    const set = existing ?? new Set<TopicMessageHandler>();
+    const set = this.topicHandlers.get(topic) ?? new Set<TopicMessageHandler>();
     set.add(handler);
     this.topicHandlers.set(topic, set);
 
-    if (isNewTopic && this.client?.connected) {
-      this.client.subscribe(topic, (err) => {
-        if (err) console.error(`[MQTT] Subscribe error for "${topic}":`, err);
-      });
+    if (this.client?.connected && !this.subscribedOnBroker.has(topic)) {
+      await this.subscribeOnBroker(this.client, topic);
     }
 
     return () => {
@@ -198,16 +234,27 @@ export class MqttSignalingAdapter implements ISignalingTransport {
     if (set.size > 0) return;
 
     this.topicHandlers.delete(topic);
-    if (this.client?.connected) {
-      this.client.unsubscribe(topic);
-    }
+    this.clearPendingUnsubscribe(topic);
+
+    const timer = window.setTimeout(() => {
+      this.pendingUnsubscribes.delete(topic);
+      if (this.topicHandlers.has(topic)) return;
+      this.subscribedOnBroker.delete(topic);
+      if (this.client?.connected) {
+        this.client.unsubscribe(topic);
+      }
+    }, UNSUBSCRIBE_GRACE_MS);
+
+    this.pendingUnsubscribes.set(topic, timer);
   }
 
   async unsubscribeTopic(rawTopic: string): Promise<void> {
     const topic = normalizeMqttTopic(rawTopic);
     if (!topic) return;
 
+    this.clearPendingUnsubscribe(topic);
     this.topicHandlers.delete(topic);
+    this.subscribedOnBroker.delete(topic);
     if (this.client?.connected) {
       this.client.unsubscribe(topic);
     }
@@ -230,7 +277,7 @@ export class MqttSignalingAdapter implements ISignalingTransport {
 
     if (this.client?.connected) {
       try {
-        await this.client.publishAsync(topic, body);
+        await this.client.publishAsync(topic, body, { qos: 1 });
         return true;
       } catch (err) {
         console.warn(`[MQTT] Publish fallback warning on "${topic}":`, err);

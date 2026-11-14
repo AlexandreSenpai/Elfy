@@ -13,10 +13,143 @@ interface StreamTileProps {
   mediaStream?: MediaStream | null;
 }
 
-const getVolumeIcon = (volume: number): string => {
+export const getVolumeIcon = (volume: number): string => {
   if (volume === 0) return 'volume_off';
   if (volume < 50) return 'volume_down';
   return 'volume_up';
+};
+
+export const useAttachedVideoStream = (
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  mediaStream: MediaStream | null | undefined,
+  isLocal: boolean,
+  volume: number
+): void => {
+  const shouldMuteRef = useRef<boolean>(isLocal || volume === 0);
+  const volumeRef = useRef<number>(Math.max(0, Math.min(1, volume / 100)));
+  const autoplayMutedRef = useRef<boolean>(false);
+
+  shouldMuteRef.current = isLocal || volume === 0;
+  volumeRef.current = Math.max(0, Math.min(1, volume / 100));
+
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (!mediaStream) {
+      videoEl.srcObject = null;
+      autoplayMutedRef.current = false;
+      return;
+    }
+
+    let disposed = false;
+    let boundTracks: MediaStreamTrack[] = [];
+    let detachGestureUnlock: (() => void) | null = null;
+
+    const removeGestureUnlock = (): void => {
+      if (!detachGestureUnlock) return;
+      detachGestureUnlock();
+      detachGestureUnlock = null;
+    };
+
+    const ensureGestureUnlock = (): void => {
+      if (detachGestureUnlock || shouldMuteRef.current) return;
+
+      const unlockAudio = (): void => {
+        removeGestureUnlock();
+        autoplayMutedRef.current = false;
+        if (disposed || shouldMuteRef.current) return;
+        videoEl.muted = false;
+        videoEl.volume = volumeRef.current;
+        void videoEl.play().catch(() => {});
+      };
+
+      window.addEventListener('pointerdown', unlockAudio, { capture: true, once: true });
+      window.addEventListener('keydown', unlockAudio, { capture: true, once: true });
+      detachGestureUnlock = () => {
+        window.removeEventListener('pointerdown', unlockAudio, { capture: true });
+        window.removeEventListener('keydown', unlockAudio, { capture: true });
+      };
+    };
+
+    const syncPlayback = async (): Promise<void> => {
+      if (disposed) return;
+      if (videoEl.srcObject !== mediaStream) {
+        videoEl.srcObject = mediaStream;
+      }
+
+      const wantMuted = shouldMuteRef.current || autoplayMutedRef.current;
+      videoEl.muted = wantMuted;
+      videoEl.volume = volumeRef.current;
+
+      try {
+        await videoEl.play();
+      } catch {
+        if (disposed || wantMuted) return;
+        autoplayMutedRef.current = true;
+        videoEl.muted = true;
+        ensureGestureUnlock();
+        await videoEl.play().catch(() => {});
+      }
+    };
+
+    const handleReady = (): void => {
+      void syncPlayback();
+    };
+
+    const rebindTrackUnmuteListeners = (): void => {
+      for (const track of boundTracks) {
+        track.removeEventListener('unmute', handleReady);
+      }
+      boundTracks = mediaStream.getTracks();
+      for (const track of boundTracks) {
+        track.addEventListener('unmute', handleReady);
+      }
+    };
+
+    const handleTracksChanged = (): void => {
+      rebindTrackUnmuteListeners();
+      void syncPlayback();
+    };
+
+    rebindTrackUnmuteListeners();
+    void syncPlayback();
+
+    mediaStream.addEventListener('addtrack', handleTracksChanged);
+    mediaStream.addEventListener('removetrack', handleTracksChanged);
+    videoEl.addEventListener('loadedmetadata', handleReady);
+    videoEl.addEventListener('canplay', handleReady);
+
+    return () => {
+      disposed = true;
+      removeGestureUnlock();
+      mediaStream.removeEventListener('addtrack', handleTracksChanged);
+      mediaStream.removeEventListener('removetrack', handleTracksChanged);
+      videoEl.removeEventListener('loadedmetadata', handleReady);
+      videoEl.removeEventListener('canplay', handleReady);
+      for (const track of boundTracks) {
+        track.removeEventListener('unmute', handleReady);
+      }
+      videoEl.srcObject = null;
+    };
+  }, [mediaStream, videoRef]);
+
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    const wantMuted = isLocal || volume === 0;
+    videoEl.volume = Math.max(0, Math.min(1, volume / 100));
+
+    if (wantMuted) {
+      autoplayMutedRef.current = false;
+      videoEl.muted = true;
+      return;
+    }
+
+    if (autoplayMutedRef.current) return;
+    videoEl.muted = false;
+  }, [isLocal, videoRef, volume]);
 };
 
 export const StreamTile: React.FC<StreamTileProps> = ({
@@ -29,37 +162,7 @@ export const StreamTile: React.FC<StreamTileProps> = ({
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
-
-    if (!mediaStream) {
-      videoEl.srcObject = null;
-      return;
-    }
-
-    const syncPlayback = (): void => {
-      videoEl.srcObject = mediaStream;
-      videoEl.play().catch(() => {});
-    };
-
-    syncPlayback();
-    mediaStream.addEventListener('addtrack', syncPlayback);
-    mediaStream.addEventListener('removetrack', syncPlayback);
-
-    return () => {
-      mediaStream.removeEventListener('addtrack', syncPlayback);
-      mediaStream.removeEventListener('removetrack', syncPlayback);
-      videoEl.srcObject = null;
-    };
-  }, [mediaStream]);
-
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
-    videoEl.muted = stream.isLocal || stream.volume === 0;
-    videoEl.volume = Math.max(0, Math.min(1, stream.volume / 100));
-  }, [stream.isLocal, stream.volume]);
+  useAttachedVideoStream(videoRef, mediaStream, stream.isLocal, stream.volume);
 
   const handleFullscreenClick = async (): Promise<void> => {
     if (onToggleFullscreen) {
@@ -86,7 +189,6 @@ export const StreamTile: React.FC<StreamTileProps> = ({
             ref={videoRef}
             autoPlay
             playsInline
-            muted={stream.isLocal || stream.volume === 0}
             disablePictureInPicture
             className={styles.realVideo}
           />

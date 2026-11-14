@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import styles from './StreamViewerPage.module.css';
 import { ChooseNickname } from '../../components/ChooseNickname/ChooseNickname';
@@ -11,8 +12,13 @@ import { ELFY_MASCOT_ICON } from '../../data/mockData';
 import { RoomRole } from '../../domain/dtos';
 import { useProfile } from '../../hooks/useProfile';
 import { useRoomSession } from '../../hooks/useRoomSession';
-import { isHubOwner } from '../../utils/hubTopics';
-import { closeStreamWindowTauri, isTauri, showRegisterWindowTauri } from '../../utils/tauri';
+import { isHubOwner, normalizeHubTopic } from '../../utils/hubTopics';
+import {
+  closeStreamWindowTauri,
+  isTauri,
+  isWindowMinimizedTauri,
+  showRegisterWindowTauri,
+} from '../../utils/tauri';
 
 interface StreamLaunchEventPayload {
   hubId: string;
@@ -60,9 +66,32 @@ export const StreamViewerPage: React.FC = () => {
     listen<StreamLaunchEventPayload>('request-start-stream', (event) => {
       if (!active) return;
       const targetHub = event.payload.hubId || '';
+      const targetNormalized = normalizeHubTopic(targetHub);
+      const currentNormalized = normalizeHubTopic(sessionActionsRef.current.hubId);
+      const isSameActiveHub =
+        !sessionActionsRef.current.hasLeftRoom &&
+        targetNormalized.length > 0 &&
+        targetNormalized === currentNormalized &&
+        (sessionActionsRef.current.role === 'owner' ||
+          sessionActionsRef.current.entranceAccepted);
+
+      if (isSameActiveHub) {
+        if (sessionActionsRef.current.isMinimized) {
+          void sessionActionsRef.current.restoreHub();
+        }
+        if (Boolean(event.payload.autoStart) && !sessionActionsRef.current.isSharing) {
+          void sessionActionsRef.current.startSharing();
+        }
+        return;
+      }
+
       setOverrideHubSlug(targetHub);
       setOverrideAutoStart(Boolean(event.payload.autoStart));
       setOverrideJoinedAs(event.payload.joinedAs ?? null);
+      sessionActionsRef.current.rejoinRoom();
+      if (sessionActionsRef.current.isMinimized) {
+        void sessionActionsRef.current.restoreHub();
+      }
     })
       .then((fn) => {
         if (!active) {
@@ -76,6 +105,50 @@ export const StreamViewerPage: React.FC = () => {
     return () => {
       active = false;
       unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
+    let checkTimer: number | null = null;
+    let unlistenResized: (() => void) | undefined;
+
+    const scheduleRestoreCheck = (): void => {
+      if (!active || !sessionActionsRef.current.isMinimized) return;
+      if (checkTimer !== null) {
+        window.clearTimeout(checkTimer);
+      }
+      checkTimer = window.setTimeout(async () => {
+        if (!active || !sessionActionsRef.current.isMinimized) return;
+        const minimized = await isWindowMinimizedTauri();
+        if (!active || minimized || !sessionActionsRef.current.isMinimized) return;
+        void sessionActionsRef.current.restoreHub();
+      }, 150);
+    };
+
+    getCurrentWindow()
+      .onResized(() => {
+        scheduleRestoreCheck();
+      })
+      .then((fn) => {
+        if (!active) {
+          fn();
+          return;
+        }
+        unlistenResized = fn;
+      })
+      .catch(() => {});
+
+    window.addEventListener('focus', scheduleRestoreCheck);
+
+    return () => {
+      active = false;
+      if (checkTimer !== null) {
+        window.clearTimeout(checkTimer);
+      }
+      window.removeEventListener('focus', scheduleRestoreCheck);
+      unlistenResized?.();
     };
   }, []);
 
@@ -93,6 +166,29 @@ export const StreamViewerPage: React.FC = () => {
     autoStart: activeAutoStart,
     isProfileLoading,
   });
+
+  const sessionActionsRef = useRef({
+    hubId: session.hubId,
+    role: session.role,
+    entranceAccepted: session.entranceAccepted,
+    isSharing: session.isSharing,
+    hasLeftRoom: session.hasLeftRoom,
+    isMinimized: session.isMinimized,
+    rejoinRoom: session.rejoinRoom,
+    restoreHub: session.restoreHub,
+    startSharing: session.startSharing,
+  });
+  sessionActionsRef.current = {
+    hubId: session.hubId,
+    role: session.role,
+    entranceAccepted: session.entranceAccepted,
+    isSharing: session.isSharing,
+    hasLeftRoom: session.hasLeftRoom,
+    isMinimized: session.isMinimized,
+    rejoinRoom: session.rejoinRoom,
+    restoreHub: session.restoreHub,
+    startSharing: session.startSharing,
+  };
 
   const handleBackToFriendHubs = async (): Promise<void> => {
     if (isTauri()) {
@@ -191,7 +287,7 @@ export const StreamViewerPage: React.FC = () => {
             errorMessage={session.knockError}
             onRetry={() => void session.requestEntrance()}
             onCancel={() => void handleCancelKnock()}
-            onLeave={() => void handleBackToFriendHubs()}
+            onLeave={() => void handleCancelKnock()}
           />
         </div>
       );
@@ -249,6 +345,7 @@ export const StreamViewerPage: React.FC = () => {
         fullscreenStreamId={session.fullscreenStreamId}
         systemMetrics={session.systemMetrics}
         highLoadSuggestion={session.highLoadSuggestion}
+        connectionFailure={session.connectionFailure}
         onToggleShare={session.toggleSharing}
         onSetFps={session.setFps}
         onToggleFps={session.toggleFps}
@@ -260,6 +357,8 @@ export const StreamViewerPage: React.FC = () => {
         onExitFullscreen={session.exitFullscreen}
         onMinimizeHub={session.minimizeHub}
         onLeaveHub={handleLeaveRoom}
+        onRetryConnection={session.retryConnection}
+        onDismissConnectionFailure={session.dismissConnectionFailure}
         onDismissHighLoadSuggestion={session.dismissHighLoadSuggestion}
       />
     );

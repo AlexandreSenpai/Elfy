@@ -473,3 +473,163 @@ test('Test 8 — Responsive Viewport Layout', async ({ browser }) => {
     await assertNoHorizontalOverflow(roomPage);
   }
 });
+
+test('Test 9 — Host Pre-Shares Before Guest Knocks & Re-Share Recovery', async ({ browser }) => {
+  const context = await createTrackedContext(browser);
+  const ownerUid = createRunUid('t9-owner');
+  const guestUid = createRunUid('t9-guest');
+
+  const ownerPage = await initPeerPage(context, ownerUid);
+  await openHomeAndSetConsent(ownerPage, 'decline');
+  const ownerHubCode = await readMyHubCode(ownerPage);
+
+  const guestPage = await initPeerPage(context, guestUid);
+  await openHomeAndSetConsent(guestPage, 'decline');
+
+  const ownerRoom = await openOwnerRoom(ownerPage);
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(ownerRoom, 1, 400);
+
+  const guestRoom = await knockGuestIntoHub(guestPage, ownerHubCode);
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(guestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+  await waitForContinuousPlayback(guestRoom, 1, 1400);
+
+  await guestRoom.getByTestId('toggle-share-btn').click();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
+  await waitForContinuousPlayback(ownerRoom, 2, 600);
+
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(2);
+  await waitForContinuousPlayback(guestRoom, 2, 600);
+});
+
+test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ browser }) => {
+  const context = await createTrackedContext(browser);
+  const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't10');
+
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(guestRoom, 1, 800);
+
+  await guestRoom.getByTestId('leave-hub-btn').click();
+  await expect(guestRoom.getByRole('button', { name: /re-join hub/i })).toBeVisible();
+  await guestRoom.getByRole('button', { name: /re-join hub/i }).click();
+
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(guestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+  await waitForContinuousPlayback(guestRoom, 1, 1400);
+
+  await ownerRoom.getByTestId('leave-hub-btn').click();
+  await expect(ownerRoom.getByRole('button', { name: /re-join hub/i })).toBeVisible();
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeVisible();
+
+  await ownerRoom.getByRole('button', { name: /re-join hub/i }).click();
+  await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(ownerRoom, 1, 400);
+
+  await guestRoom.getByRole('button', { name: /knock again/i }).click();
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(guestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+  await waitForContinuousPlayback(guestRoom, 1, 1000);
+
+  // Simulate an ungraceful guest disconnect (no peer_left sent) and verify accepting
+  // the returning knock cleans up the previous connection cleanly without duplicate peers.
+  const ownerUrl = ownerRoom.url();
+  const hubQuery = new URL(ownerUrl).hash.split('?')[1] ?? '';
+  const ownerHubId = new URLSearchParams(hubQuery).get('hubId') ?? '';
+  const guestHash = guestRoom.url().split('#')[1] ?? `/stream?hubId=${encodeURIComponent(ownerHubId)}&autoStart=false`;
+  const contextCookies = await guestRoom.evaluate(() => sessionStorage.getItem('elfy_test_machine_uid') || '');
+
+  await guestRoom.close({ runBeforeUnload: false });
+  const guestRoomReborn = await initPeerPage(context, contextCookies);
+  await guestRoomReborn.goto(`/#${guestHash}`);
+
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+
+  await expect(guestRoomReborn.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(guestRoomReborn.getByTestId('multi-stream-hub')).toBeVisible();
+  await waitForContinuousPlayback(guestRoomReborn, 1, 1400);
+
+  // Both peers sharing should result in exactly 2 stream tiles (no duplicate stale peer)
+  await guestRoomReborn.getByTestId('toggle-share-btn').click();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
+  await expect(guestRoomReborn.getByTestId('stream-tile')).toHaveCount(2);
+  await waitForContinuousPlayback(ownerRoom, 2, 1200);
+});
+
+test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics', async ({
+  browser,
+}) => {
+  const context = await createTrackedContext(browser);
+  const ownerUid = createRunUid('t11-owner');
+
+  const ownerPage = await initPeerPage(context, ownerUid);
+  await openHomeAndSetConsent(ownerPage, 'decline');
+
+  // Left-click and Ctrl+Left-click on Companion dock/brand must NOT open context menu
+  await ownerPage.getByTestId('dock-brand-trigger').click({ button: 'left' });
+  await expect(ownerPage.getByTestId('dock-context-menu')).toBeHidden();
+  await ownerPage.getByTestId('dock-brand-trigger').click({ modifiers: ['Control'] });
+  await expect(ownerPage.getByTestId('dock-context-menu')).toBeHidden();
+
+  // Right-click on Companion dock/brand opens context menu with Close Elfy
+  await ownerPage.getByTestId('dock-brand-trigger').click({ button: 'right' });
+  await expect(ownerPage.getByTestId('dock-context-menu')).toBeVisible();
+  await expect(ownerPage.getByTestId('close-elfy-menu-btn')).toBeVisible();
+  await ownerPage.getByTestId('dismiss-dock-menu-btn').click();
+  await expect(ownerPage.getByTestId('dock-context-menu')).toBeHidden();
+
+  const ownerRoom = await openOwnerRoom(ownerPage);
+
+  // Left-click and Ctrl+Left-click on Watch Room BottomDock must NOT open context menu
+  await ownerRoom.getByTestId('bottom-dock').click({ button: 'left' });
+  await expect(ownerRoom.getByTestId('dock-context-menu')).toBeHidden();
+  await ownerRoom.getByTestId('bottom-dock').click({ modifiers: ['Control'] });
+  await expect(ownerRoom.getByTestId('dock-context-menu')).toBeHidden();
+
+  // Right-click on Watch Room BottomDock opens Elfy context menu cleanly
+  await ownerRoom.getByTestId('bottom-dock').click({ button: 'right' });
+  await expect(ownerRoom.getByTestId('dock-context-menu')).toBeVisible();
+  await expect(ownerRoom.getByTestId('close-elfy-menu-btn')).toBeVisible();
+  await ownerRoom.getByTestId('dismiss-dock-menu-btn').click();
+  await expect(ownerRoom.getByTestId('dock-context-menu')).toBeHidden();
+
+  // Trigger a screen capture failure and verify stage + exact reason + Reconnect recovery
+  await ownerRoom.evaluate(() => {
+    const win = window as unknown as { __ELFY_FORCE_SYNTHETIC_STREAM__?: boolean };
+    win.__ELFY_FORCE_SYNTHETIC_STREAM__ = false;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: {
+        getDisplayMedia: async () => {
+          throw new Error('Screen permission denied by OS policy');
+        },
+      },
+    });
+  });
+
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await expect(ownerRoom.getByTestId('connection-failure-alert')).toBeVisible();
+  await expect(ownerRoom.getByTestId('connection-failure-stage')).toHaveText('Screen Capture');
+  await expect(ownerRoom.getByTestId('connection-failure-reason')).toContainText(
+    'Screen permission denied by OS policy'
+  );
+
+  // Reconnect button clears failure alert and restores healthy hub state
+  await ownerRoom.getByTestId('retry-connection-btn').click();
+  await expect(ownerRoom.getByTestId('connection-failure-alert')).toBeHidden();
+  await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
+});

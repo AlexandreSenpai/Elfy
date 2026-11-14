@@ -4,12 +4,13 @@ import { UserProfile } from '../../domain/dtos';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
 import { formatFullPeerTag } from '../../utils/hubTopics';
 import {
+  beginWindowDragOnMove,
   closeStreamWindowTauri,
   isTauri,
   minimizeWindowTauri,
-  startDraggingTauri,
   toggleMaximizeWindowTauri,
 } from '../../utils/tauri';
+import { DockContextMenu, useDockContextMenu } from '../DockContextMenu/DockContextMenu';
 
 interface HeaderProps {
   profile: UserProfile;
@@ -33,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenProfile,
 }) => {
   const [copied, setCopied] = useState(false);
+  const { menuPosition, closeMenu, handleDockContextMenu } = useDockContextMenu();
 
   const fallbackHub = `elfy/hub/${formatFullPeerTag(profile.nickname, profile.peerTag)}`;
   const effectiveRoomTitle = roomTitle || fallbackHub;
@@ -50,11 +52,11 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const handleMinimizeWindow = async (): Promise<void> => {
-    if (isTauri()) {
-      await minimizeWindowTauri();
+    if (onMinimizeHub) {
+      await onMinimizeHub();
       return;
     }
-    await onMinimizeHub?.();
+    await minimizeWindowTauri();
   };
 
   const handleMaximizeWindow = async (): Promise<void> => {
@@ -79,7 +81,7 @@ export const Header: React.FC<HeaderProps> = ({
       void toggleMaximizeWindowTauri();
       return;
     }
-    startDraggingTauri();
+    beginWindowDragOnMove(e.clientX, e.clientY);
   };
 
   const handleDoubleClick = (e: React.MouseEvent): void => {
@@ -91,13 +93,19 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header
-      className={styles.header}
-      onMouseDown={handleMouseDown}
-      onDoubleClick={handleDoubleClick}
-    >
-      <div className={styles.leftSection}>
-        <div className={styles.brandWrap}>
+    <>
+      <header
+        className={styles.header}
+        onContextMenu={handleDockContextMenu}
+        onDoubleClick={handleDoubleClick}
+        onMouseDown={handleMouseDown}
+      >
+        <div className={styles.leftSection}>
+          <div
+            className={styles.brandWrap}
+            data-testid="dock-brand-trigger"
+            title="Right-click for Elfy options"
+          >
           <div className={styles.mascotLogo}>
             <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" className={styles.mascotImg} />
           </div>
@@ -193,6 +201,8 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
     </header>
+      <DockContextMenu position={menuPosition} onClose={closeMenu} />
+    </>
   );
 };
 

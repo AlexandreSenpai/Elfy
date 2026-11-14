@@ -1,5 +1,6 @@
 import { SIGNALING_CONFIG, STREAM_CONFIG } from '../domain/config';
 import {
+  ConnectionFailureDto,
   DataChannelEnvelopeDto,
   DataChannelMessageType,
   DataChannelPayload,
@@ -27,6 +28,16 @@ interface PeerEntry {
   pc: RTCPeerConnection;
   dataChannel: RTCDataChannel | null;
   pendingIce: RTCIceCandidateInit[];
+  pendingLocalIce: RTCIceCandidateInit[];
+  canEmitIce: boolean;
+  signalingChain: Promise<void>;
+  iceRestartCount: number;
+  receivedRemoteIceCount: number;
+  disconnectTimer: number | null;
+  offerTimeoutTimer: number | null;
+  createdAt: number;
+  lastSeenAt: number;
+  missedPingCount: number;
   sessionToken: string;
   makingOffer: boolean;
   ignoreOffer: boolean;
@@ -248,7 +259,7 @@ export class WebRtcStreamEngine implements IStreamEngine {
         audio: true,
       });
     } catch (err) {
-      if (navigator.webdriver) {
+      if (navigator.webdriver && win.__ELFY_FORCE_SYNTHETIC_STREAM__ !== false) {
         return this.createSyntheticStream(fps);
       }
       throw err;
@@ -259,9 +270,14 @@ export class WebRtcStreamEngine implements IStreamEngine {
     const targetFps = fps ?? this.currentFps;
     this.currentFps = targetFps;
 
-    if (this.localStream) {
+    const existingVideo = this.localStream?.getVideoTracks()[0];
+    if (this.localStream && existingVideo && existingVideo.readyState === 'live') {
       await this.setStreamFps(targetFps);
       return this.localStream;
+    }
+
+    if (this.localStream) {
+      await this.stopScreenCapture();
     }
 
     const stream = await this.acquireCaptureStream(targetFps);
@@ -316,15 +332,36 @@ export class WebRtcStreamEngine implements IStreamEngine {
     stream: MediaStream
   ): Promise<void> {
     if (entry.pc.connectionState === 'closed') return;
-    const senders = entry.pc.getSenders();
+    const transceivers = entry.pc.getTransceivers();
 
     for (const track of stream.getTracks()) {
-      const existingSender = senders.find((s) => s.track?.kind === track.kind);
+      const existingTransceiver = transceivers.find(
+        (t) =>
+          t.direction !== 'stopped' &&
+          t.currentDirection !== 'stopped' &&
+          (t.sender.track?.kind === track.kind ||
+            (t.sender.track === null && t.receiver.track?.kind === track.kind))
+      );
+
+      if (existingTransceiver) {
+        if (
+          existingTransceiver.direction === 'recvonly' ||
+          existingTransceiver.direction === 'inactive'
+        ) {
+          existingTransceiver.direction = 'sendrecv';
+        }
+        await existingTransceiver.sender.replaceTrack(track);
+        await updateSenderMaxFramerate(existingTransceiver.sender, this.currentFps);
+        continue;
+      }
+
+      const existingSender = entry.pc.getSenders().find((s) => s.track?.kind === track.kind);
       if (existingSender) {
         await existingSender.replaceTrack(track);
         await updateSenderMaxFramerate(existingSender, this.currentFps);
         continue;
       }
+
       const added = entry.pc.addTrack(track, stream);
       await updateSenderMaxFramerate(added, this.currentFps);
     }
@@ -397,18 +434,187 @@ export class WebRtcStreamEngine implements IStreamEngine {
     await this.replaceVideoTrackOnStreamAndPeers(videoTrack, refreshed);
   }
 
+  private enqueuePeerTask(entry: PeerEntry, task: () => Promise<void>): Promise<void> {
+    const run = entry.signalingChain
+      .catch(() => {})
+      .then(async () => {
+        if (entry.pc.connectionState === 'closed' || this.peers.get(entry.peerIdSafe) !== entry) {
+          return;
+        }
+        await task();
+      });
+    entry.signalingChain = run.catch(() => {});
+    return run;
+  }
+
+  private clearDisconnectTimer(entry: PeerEntry): void {
+    if (entry.disconnectTimer === null) return;
+    window.clearTimeout(entry.disconnectTimer);
+    entry.disconnectTimer = null;
+  }
+
+  private clearOfferTimeoutTimer(entry: PeerEntry): void {
+    if (entry.offerTimeoutTimer === null) return;
+    window.clearTimeout(entry.offerTimeoutTimer);
+    entry.offerTimeoutTimer = null;
+  }
+
+  private scheduleOfferTimeout(entry: PeerEntry): void {
+    this.clearOfferTimeoutTimer(entry);
+    entry.offerTimeoutTimer = window.setTimeout(() => {
+      entry.offerTimeoutTimer = null;
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
+      if (entry.pc.connectionState === 'closed' || entry.initialHandshakeDone) return;
+      if (entry.pc.signalingState !== 'have-local-offer') return;
+
+      if (entry.pc.localDescription) {
+        void this.callbacks.onSignalOffer?.(
+          entry.peerIdSafe,
+          entry.pc.localDescription.toJSON(),
+          entry.sessionToken
+        );
+      }
+
+      entry.offerTimeoutTimer = window.setTimeout(() => {
+        entry.offerTimeoutTimer = null;
+        if (this.peers.get(entry.peerIdSafe) !== entry) return;
+        if (entry.pc.connectionState === 'closed' || entry.initialHandshakeDone) return;
+        if (entry.pc.signalingState !== 'have-local-offer') return;
+
+        this.callbacks.onPeerConnectionError?.({
+          stage: 'sdp_handshake',
+          reason: 'Peer did not answer the WebRTC offer in time (SDP handshake timed out).',
+          details: `peer=${entry.peerIdSafe}, signalingState=${entry.pc.signalingState}, iceGatheringState=${entry.pc.iceGatheringState}`,
+          peerIdSafe: entry.peerIdSafe,
+          timestamp: Date.now(),
+        });
+      }, 5500);
+    }, 3500);
+  }
+
+  private buildConnectionFailure(entry: PeerEntry): ConnectionFailureDto {
+    const details = `peer=${entry.peerIdSafe}, connectionState=${entry.pc.connectionState}, iceConnectionState=${entry.pc.iceConnectionState}, iceGatheringState=${entry.pc.iceGatheringState}, receivedRemoteIceCount=${entry.receivedRemoteIceCount}, iceRestarts=${entry.iceRestartCount}`;
+
+    if (entry.initialHandshakeDone) {
+      return {
+        stage: 'peer_disconnected',
+        reason: 'Lost active P2P stream connection with remote peer.',
+        details,
+        peerIdSafe: entry.peerIdSafe,
+        timestamp: Date.now(),
+      };
+    }
+
+    if (entry.receivedRemoteIceCount === 0) {
+      return {
+        stage: 'ice_negotiation',
+        reason: 'ICE negotiation failed (0 network candidates received from remote peer).',
+        details,
+        peerIdSafe: entry.peerIdSafe,
+        timestamp: Date.now(),
+      };
+    }
+
+    return {
+      stage: 'ice_negotiation',
+      reason: 'WebRTC NAT/Firewall negotiation failed across available network routes.',
+      details,
+      peerIdSafe: entry.peerIdSafe,
+      timestamp: Date.now(),
+    };
+  }
+
+  private triggerIceRestart(entry: PeerEntry): void {
+    if (entry.pc.connectionState === 'closed' || entry.iceRestartCount >= 2) return;
+    entry.iceRestartCount += 1;
+    if (typeof entry.pc.restartIce === 'function') {
+      entry.pc.restartIce();
+    }
+    void this.renegotiatePeer(entry.peerIdSafe);
+  }
+
+  private touchPeerActivity(entry: PeerEntry): void {
+    entry.lastSeenAt = Date.now();
+    entry.missedPingCount = 0;
+  }
+
+  private detachAndClosePeerEntry(entry: PeerEntry): void {
+    this.clearDisconnectTimer(entry);
+    this.clearOfferTimeoutTimer(entry);
+    entry.pc.onicecandidate = null;
+    entry.pc.ontrack = null;
+    entry.pc.ondatachannel = null;
+    entry.pc.onsignalingstatechange = null;
+    entry.pc.oniceconnectionstatechange = null;
+    entry.pc.onconnectionstatechange = null;
+
+    for (const sender of entry.pc.getSenders()) {
+      try {
+        entry.pc.removeTrack(sender);
+      } catch {
+        // Ignore errors removing senders on an already closing RTCPeerConnection.
+      }
+    }
+
+    if (entry.dataChannel) {
+      entry.dataChannel.onopen = null;
+      entry.dataChannel.onmessage = null;
+      entry.dataChannel.onclose = null;
+      entry.dataChannel.onerror = null;
+      try {
+        entry.dataChannel.close();
+      } catch {
+        // Ignore errors closing an already closing/closed DataChannel.
+      }
+      entry.dataChannel = null;
+    }
+
+    try {
+      entry.pc.close();
+    } catch {
+      // Ignore errors closing an already closed RTCPeerConnection.
+    }
+  }
+
+  private isDataChannelTransportHealthy(entry: PeerEntry): boolean {
+    if (!entry.initialHandshakeDone || entry.dataChannel?.readyState !== 'open') return false;
+    const ice = entry.pc.iceConnectionState;
+    return ice === 'connected' || ice === 'completed';
+  }
+
   private getOrCreatePeerEntry(remotePeerIdSafe: string, sessionToken: string): PeerEntry {
     const existing = this.peers.get(remotePeerIdSafe);
-    if (existing && existing.pc.connectionState !== 'closed') {
+    const isReusable =
+      existing &&
+      existing.sessionToken === sessionToken &&
+      this.isPeerHealthy(remotePeerIdSafe);
+
+    if (isReusable) {
       return existing;
     }
 
+    if (existing) {
+      this.peers.delete(remotePeerIdSafe);
+      this.detachAndClosePeerEntry(existing);
+    }
+
+    const now = Date.now();
     const pc = new RTCPeerConnection(getRtcConfiguration());
     const entry: PeerEntry = {
       peerIdSafe: remotePeerIdSafe,
       pc,
       dataChannel: null,
       pendingIce: [],
+      pendingLocalIce: [],
+      canEmitIce: true,
+      signalingChain: Promise.resolve(),
+      iceRestartCount: 0,
+      receivedRemoteIceCount: 0,
+      disconnectTimer: null,
+      offerTimeoutTimer: null,
+      createdAt: now,
+      lastSeenAt: now,
+      missedPingCount: 0,
       sessionToken,
       makingOffer: false,
       ignoreOffer: false,
@@ -424,34 +630,67 @@ export class WebRtcStreamEngine implements IStreamEngine {
 
   private bindPeerEvents(entry: PeerEntry): void {
     entry.pc.onicecandidate = (event) => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       if (!event.candidate) return;
       this.emitIceCandidate(entry, event.candidate.toJSON());
     };
 
     entry.pc.ontrack = (event) => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       this.handleRemoteTrack(entry, event);
     };
 
     entry.pc.ondatachannel = (event) => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       if (event.channel.label !== SIGNALING_CONFIG.DATA_CHANNEL_LABEL) return;
       this.attachDataChannel(entry, event.channel);
     };
 
     entry.pc.onsignalingstatechange = () => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       if (entry.pc.signalingState === 'stable' && entry.pendingRenegotiation) {
         entry.pendingRenegotiation = false;
         void this.renegotiatePeer(entry.peerIdSafe);
       }
     };
 
+    entry.pc.oniceconnectionstatechange = () => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
+      const iceState = entry.pc.iceConnectionState;
+      if (iceState === 'connected' || iceState === 'completed') {
+        this.clearDisconnectTimer(entry);
+        entry.iceRestartCount = 0;
+        return;
+      }
+      if (iceState === 'disconnected' && entry.pc.connectionState !== 'closed') {
+        if (entry.disconnectTimer !== null) return;
+        entry.disconnectTimer = window.setTimeout(() => {
+          entry.disconnectTimer = null;
+          if (this.peers.get(entry.peerIdSafe) !== entry) return;
+          if (entry.pc.iceConnectionState !== 'disconnected') return;
+          this.triggerIceRestart(entry);
+        }, 3500);
+        return;
+      }
+      if (iceState !== 'failed') return;
+      this.clearDisconnectTimer(entry);
+      if (entry.iceRestartCount >= 2) {
+        if (entry.pc.connectionState === 'failed') {
+          this.handleConnectionStateChange(entry);
+        }
+        return;
+      }
+      this.triggerIceRestart(entry);
+    };
+
     entry.pc.onconnectionstatechange = () => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       this.handleConnectionStateChange(entry);
     };
   }
 
-  private emitIceCandidate(entry: PeerEntry, candidate: RTCIceCandidateInit): void {
-    const dcOpen = entry.initialHandshakeDone && entry.dataChannel?.readyState === 'open';
-    if (dcOpen) {
+  private dispatchLocalIceCandidate(entry: PeerEntry, candidate: RTCIceCandidateInit): void {
+    if (this.isDataChannelTransportHealthy(entry)) {
       this.sendDataChannelMessage(
         entry.peerIdSafe,
         { type: 'renegotiate_ice', fromPeerIdSafe: this.localPeerIdSafe, candidate },
@@ -463,24 +702,76 @@ export class WebRtcStreamEngine implements IStreamEngine {
     void this.callbacks.onSignalIce?.(entry.peerIdSafe, candidate, entry.sessionToken);
   }
 
-  private handleRemoteTrack(entry: PeerEntry, event: RTCTrackEvent): void {
-    const stream = event.streams[0] ?? entry.remoteStream ?? new MediaStream();
-    const hasTrack = stream.getTracks().some((t) => t.id === event.track.id);
-    if (!hasTrack) {
-      stream.addTrack(event.track);
+  private emitIceCandidate(entry: PeerEntry, candidate: RTCIceCandidateInit): void {
+    if (!entry.canEmitIce) {
+      entry.pendingLocalIce.push(candidate);
+      return;
     }
+    this.dispatchLocalIceCandidate(entry, candidate);
+  }
+
+  private flushPendingLocalIce(entry: PeerEntry): void {
+    if (!entry.canEmitIce) return;
+    const buffered = entry.pendingLocalIce.splice(0, entry.pendingLocalIce.length);
+    for (const candidate of buffered) {
+      this.dispatchLocalIceCandidate(entry, candidate);
+    }
+  }
+
+  private buildFreshRemoteStream(entry: PeerEntry, incomingTrack?: MediaStreamTrack): MediaStream | null {
+    const tracks: MediaStreamTrack[] = [];
+    const existingTracks = entry.remoteStream?.getTracks() ?? [];
+
+    for (const track of existingTracks) {
+      if (track.readyState === 'ended') continue;
+      if (incomingTrack && (track.id === incomingTrack.id || track.kind === incomingTrack.kind)) {
+        continue;
+      }
+      tracks.push(track);
+    }
+
+    if (incomingTrack && incomingTrack.readyState !== 'ended') {
+      tracks.push(incomingTrack);
+    }
+
+    if (tracks.length === 0) return null;
+    return new MediaStream(tracks);
+  }
+
+  private handleRemoteTrack(entry: PeerEntry, event: RTCTrackEvent): void {
+    this.touchPeerActivity(entry);
+    const stream = this.buildFreshRemoteStream(entry, event.track);
+    if (!stream) return;
 
     entry.remoteStream = stream;
     this.callbacks.onRemoteStream?.(entry.peerIdSafe, stream);
+
+    event.track.onunmute = () => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
+      if (entry.pc.connectionState === 'closed' || event.track.readyState === 'ended') return;
+      const unmutedStream = this.buildFreshRemoteStream(entry, event.track);
+      if (!unmutedStream) return;
+      entry.remoteStream = unmutedStream;
+      this.callbacks.onRemoteStream?.(entry.peerIdSafe, unmutedStream);
+    };
   }
 
   private handleConnectionStateChange(entry: PeerEntry): void {
     const state = entry.pc.connectionState;
     this.callbacks.onPeerConnectionStateChange?.(entry.peerIdSafe, state);
 
-    if (state === 'failed' || state === 'closed') {
-      entry.remoteStream = null;
-      this.callbacks.onRemoteStreamRemoved?.(entry.peerIdSafe);
+    const shouldEvict = state === 'closed' || (state === 'failed' && entry.iceRestartCount >= 2);
+    if (!shouldEvict) return;
+
+    const failure = state === 'failed' ? this.buildConnectionFailure(entry) : null;
+    entry.remoteStream = null;
+    if (this.peers.get(entry.peerIdSafe) === entry) {
+      this.peers.delete(entry.peerIdSafe);
+      this.detachAndClosePeerEntry(entry);
+    }
+    this.callbacks.onRemoteStreamRemoved?.(entry.peerIdSafe);
+    if (failure) {
+      this.callbacks.onPeerConnectionError?.(failure);
     }
   }
 
@@ -488,11 +779,15 @@ export class WebRtcStreamEngine implements IStreamEngine {
     entry.dataChannel = channel;
 
     channel.onopen = () => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       entry.initialHandshakeDone = true;
+      this.touchPeerActivity(entry);
+      this.clearOfferTimeoutTimer(entry);
       this.callbacks.onDataChannelOpen?.(entry.peerIdSafe);
     };
 
     channel.onmessage = (event: MessageEvent) => {
+      if (this.peers.get(entry.peerIdSafe) !== entry) return;
       void this.handleRawDataChannelEvent(entry, event.data);
     };
   }
@@ -504,6 +799,7 @@ export class WebRtcStreamEngine implements IStreamEngine {
     const envelope = parseDataChannelMessage(rawData);
     if (!envelope) return;
     if (envelope.sessionToken !== entry.sessionToken) return;
+    this.touchPeerActivity(entry);
 
     const handler = this.dcDispatch[envelope.payload.type];
     if (!handler) return;
@@ -555,34 +851,49 @@ export class WebRtcStreamEngine implements IStreamEngine {
     sessionToken: string
   ): Promise<void> {
     if (!remotePeerIdSafe || !sessionToken) return;
+    const prev = this.peers.get(remotePeerIdSafe);
+    if (prev) {
+      this.peers.delete(remotePeerIdSafe);
+      this.detachAndClosePeerEntry(prev);
+    }
     this.expectedTokens.set(remotePeerIdSafe, sessionToken);
     const entry = this.getOrCreatePeerEntry(remotePeerIdSafe, sessionToken);
 
-    if (!entry.dataChannel) {
-      const dc = entry.pc.createDataChannel(SIGNALING_CONFIG.DATA_CHANNEL_LABEL, {
-        ordered: true,
-      });
-      this.attachDataChannel(entry, dc);
-    }
-
-    if (this.localStream) {
-      await this.attachLocalTracksToPeer(entry, this.localStream);
-    }
-
-    entry.makingOffer = true;
-    try {
-      const offer = await entry.pc.createOffer();
-      await entry.pc.setLocalDescription(offer);
-      if (entry.pc.localDescription) {
-        await this.callbacks.onSignalOffer?.(
-          remotePeerIdSafe,
-          entry.pc.localDescription.toJSON(),
-          sessionToken
-        );
+    return this.enqueuePeerTask(entry, async () => {
+      if (!entry.dataChannel) {
+        const dc = entry.pc.createDataChannel(SIGNALING_CONFIG.DATA_CHANNEL_LABEL, {
+          ordered: true,
+        });
+        this.attachDataChannel(entry, dc);
       }
-    } finally {
-      entry.makingOffer = false;
-    }
+
+      if (this.localStream) {
+        await this.attachLocalTracksToPeer(entry, this.localStream);
+      }
+
+      entry.makingOffer = true;
+      entry.canEmitIce = false;
+      try {
+        const offer = await entry.pc.createOffer();
+        await entry.pc.setLocalDescription(offer);
+        if (entry.pc.localDescription) {
+          await this.callbacks.onSignalOffer?.(
+            remotePeerIdSafe,
+            entry.pc.localDescription.toJSON(),
+            sessionToken
+          );
+        }
+        entry.canEmitIce = true;
+        this.flushPendingLocalIce(entry);
+        this.scheduleOfferTimeout(entry);
+      } finally {
+        entry.makingOffer = false;
+        entry.canEmitIce = true;
+        if (entry.pc.localDescription) {
+          this.flushPendingLocalIce(entry);
+        }
+      }
+    });
   }
 
   async handleIncomingOffer(
@@ -596,30 +907,62 @@ export class WebRtcStreamEngine implements IStreamEngine {
     const entry = this.getOrCreatePeerEntry(remotePeerIdSafe, sessionToken);
     if (entry.sessionToken !== sessionToken) return;
 
-    const collision = entry.makingOffer || entry.pc.signalingState !== 'stable';
-    const polite = isPolitePeer(this.localPeerIdSafe, remotePeerIdSafe);
-    if (collision && !polite) return;
+    return this.enqueuePeerTask(entry, async () => {
+      const collision = entry.makingOffer || entry.pc.signalingState !== 'stable';
+      const polite = isPolitePeer(this.localPeerIdSafe, remotePeerIdSafe);
+      if (collision && !polite) return;
 
-    if (collision && polite) {
-      await entry.pc.setLocalDescription({ type: 'rollback' });
-    }
+      if (collision && polite) {
+        await entry.pc.setLocalDescription({ type: 'rollback' });
+      }
 
-    await entry.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    await this.flushPendingIce(entry);
+      await entry.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await this.flushPendingIce(entry);
 
-    if (this.localStream) {
-      await this.attachLocalTracksToPeer(entry, this.localStream);
-    }
+      if (this.localStream) {
+        await this.attachLocalTracksToPeer(entry, this.localStream);
+      }
 
-    const answer = await entry.pc.createAnswer();
-    await entry.pc.setLocalDescription(answer);
-    if (!entry.pc.localDescription) return;
+      entry.canEmitIce = false;
+      try {
+        const answer = await entry.pc.createAnswer();
+        await entry.pc.setLocalDescription(answer);
+        if (entry.pc.localDescription) {
+          await this.callbacks.onSignalAnswer?.(
+            remotePeerIdSafe,
+            entry.pc.localDescription.toJSON(),
+            sessionToken
+          );
+        }
+        entry.canEmitIce = true;
+        this.flushPendingLocalIce(entry);
+        this.scheduleOfferTimeout(entry);
+      } finally {
+        entry.canEmitIce = true;
+        if (entry.pc.localDescription) {
+          this.flushPendingLocalIce(entry);
+        }
+      }
 
-    await this.callbacks.onSignalAnswer?.(
-      remotePeerIdSafe,
-      entry.pc.localDescription.toJSON(),
-      sessionToken
-    );
+      this.ensureLocalSendersNegotiated(entry);
+    });
+  }
+
+  private ensureLocalSendersNegotiated(entry: PeerEntry): void {
+    if (!this.localStream) return;
+    const hasUnnegotiatedSender = entry.pc
+      .getTransceivers()
+      .some(
+        (t) =>
+          t.direction !== 'stopped' &&
+          t.currentDirection !== 'stopped' &&
+          t.sender.track !== null &&
+          t.currentDirection !== 'sendrecv' &&
+          t.currentDirection !== 'sendonly'
+      );
+    if (!hasUnnegotiatedSender) return;
+    entry.pendingRenegotiation = true;
+    void this.renegotiatePeer(entry.peerIdSafe);
   }
 
   async handleIncomingAnswer(
@@ -629,10 +972,14 @@ export class WebRtcStreamEngine implements IStreamEngine {
   ): Promise<void> {
     const entry = this.peers.get(remotePeerIdSafe);
     if (!entry || entry.sessionToken !== sessionToken) return;
-    if (entry.pc.signalingState !== 'have-local-offer') return;
 
-    await entry.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    await this.flushPendingIce(entry);
+    return this.enqueuePeerTask(entry, async () => {
+      if (entry.pc.signalingState !== 'have-local-offer') return;
+      this.touchPeerActivity(entry);
+      this.clearOfferTimeoutTimer(entry);
+      await entry.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      await this.flushPendingIce(entry);
+    });
   }
 
   async handleIncomingIce(
@@ -640,15 +987,22 @@ export class WebRtcStreamEngine implements IStreamEngine {
     candidate: RTCIceCandidateInit,
     sessionToken: string
   ): Promise<void> {
-    const entry = this.peers.get(remotePeerIdSafe);
-    if (!entry || entry.sessionToken !== sessionToken) return;
+    const expected = this.expectedTokens.get(remotePeerIdSafe);
+    if (!expected || expected !== sessionToken) return;
 
-    if (!entry.pc.remoteDescription) {
-      entry.pendingIce.push(candidate);
-      return;
-    }
+    const entry = this.getOrCreatePeerEntry(remotePeerIdSafe, sessionToken);
+    if (entry.sessionToken !== sessionToken) return;
 
-    await this.addIceSafely(entry.pc, candidate);
+    return this.enqueuePeerTask(entry, async () => {
+      this.touchPeerActivity(entry);
+      entry.receivedRemoteIceCount += 1;
+      if (!entry.pc.remoteDescription) {
+        entry.pendingIce.push(candidate);
+        return;
+      }
+
+      await this.addIceSafely(entry.pc, candidate);
+    });
   }
 
   sendDataChannelMessage<T extends DataChannelPayload>(
@@ -699,32 +1053,59 @@ export class WebRtcStreamEngine implements IStreamEngine {
     envelope: DataChannelEnvelopeDto
   ): Promise<void> {
     if (envelope.payload.type !== 'renegotiate_offer') return;
+    const sdpInit = envelope.payload.sdp;
 
-    const collision = entry.makingOffer || entry.pc.signalingState !== 'stable';
-    const polite = isPolitePeer(this.localPeerIdSafe, entry.peerIdSafe);
-    entry.ignoreOffer = !polite && collision;
-    if (entry.ignoreOffer) return;
+    return this.enqueuePeerTask(entry, async () => {
+      const collision = entry.makingOffer || entry.pc.signalingState !== 'stable';
+      const polite = isPolitePeer(this.localPeerIdSafe, entry.peerIdSafe);
+      entry.ignoreOffer = !polite && collision;
+      if (entry.ignoreOffer) return;
 
-    if (collision && polite) {
-      await entry.pc.setLocalDescription({ type: 'rollback' });
-    }
+      if (collision && polite) {
+        await entry.pc.setLocalDescription({ type: 'rollback' });
+      }
 
-    await entry.pc.setRemoteDescription(new RTCSessionDescription(envelope.payload.sdp));
-    await this.flushPendingIce(entry);
+      await entry.pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
+      await this.flushPendingIce(entry);
 
-    const answer = await entry.pc.createAnswer();
-    await entry.pc.setLocalDescription(answer);
-    if (!entry.pc.localDescription) return;
+      if (this.localStream) {
+        await this.attachLocalTracksToPeer(entry, this.localStream);
+      }
 
-    this.sendDataChannelMessage(
-      entry.peerIdSafe,
-      {
-        type: 'renegotiate_answer',
-        fromPeerIdSafe: this.localPeerIdSafe,
-        sdp: entry.pc.localDescription.toJSON(),
-      },
-      entry.sessionToken
-    );
+      entry.canEmitIce = false;
+      try {
+        const answer = await entry.pc.createAnswer();
+        await entry.pc.setLocalDescription(answer);
+        if (entry.pc.localDescription) {
+          const sdp = entry.pc.localDescription.toJSON();
+          const sentOverDc =
+            this.isDataChannelTransportHealthy(entry) &&
+            this.sendDataChannelMessage(
+              entry.peerIdSafe,
+              {
+                type: 'renegotiate_answer',
+                fromPeerIdSafe: this.localPeerIdSafe,
+                sdp,
+              },
+              entry.sessionToken
+            );
+
+          if (!sentOverDc) {
+            await this.callbacks.onSignalAnswer?.(entry.peerIdSafe, sdp, entry.sessionToken);
+          }
+        }
+        entry.canEmitIce = true;
+        this.flushPendingLocalIce(entry);
+        this.scheduleOfferTimeout(entry);
+      } finally {
+        entry.canEmitIce = true;
+        if (entry.pc.localDescription) {
+          this.flushPendingLocalIce(entry);
+        }
+      }
+
+      this.ensureLocalSendersNegotiated(entry);
+    });
   }
 
   private async handleRenegotiateAnswer(
@@ -732,10 +1113,14 @@ export class WebRtcStreamEngine implements IStreamEngine {
     envelope: DataChannelEnvelopeDto
   ): Promise<void> {
     if (envelope.payload.type !== 'renegotiate_answer') return;
-    if (entry.pc.signalingState !== 'have-local-offer') return;
+    const sdpInit = envelope.payload.sdp;
 
-    await entry.pc.setRemoteDescription(new RTCSessionDescription(envelope.payload.sdp));
-    await this.flushPendingIce(entry);
+    return this.enqueuePeerTask(entry, async () => {
+      if (entry.pc.signalingState !== 'have-local-offer') return;
+
+      await entry.pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
+      await this.flushPendingIce(entry);
+    });
   }
 
   private async handleRenegotiateIce(
@@ -743,43 +1128,62 @@ export class WebRtcStreamEngine implements IStreamEngine {
     envelope: DataChannelEnvelopeDto
   ): Promise<void> {
     if (envelope.payload.type !== 'renegotiate_ice') return;
+    const candidate = envelope.payload.candidate;
 
-    if (!entry.pc.remoteDescription) {
-      entry.pendingIce.push(envelope.payload.candidate);
-      return;
-    }
+    return this.enqueuePeerTask(entry, async () => {
+      this.touchPeerActivity(entry);
+      entry.receivedRemoteIceCount += 1;
+      if (!entry.pc.remoteDescription) {
+        entry.pendingIce.push(candidate);
+        return;
+      }
 
-    await this.addIceSafely(entry.pc, envelope.payload.candidate);
+      await this.addIceSafely(entry.pc, candidate);
+    });
   }
 
   async renegotiatePeer(remotePeerIdSafe: string): Promise<void> {
     const entry = this.peers.get(remotePeerIdSafe);
     if (!entry || entry.pc.connectionState === 'closed') return;
-    if (entry.makingOffer || entry.pc.signalingState !== 'stable') {
-      entry.pendingRenegotiation = true;
-      return;
-    }
 
-    entry.pendingRenegotiation = false;
-    entry.makingOffer = true;
-    try {
-      const offer = await entry.pc.createOffer();
-      await entry.pc.setLocalDescription(offer);
-      if (!entry.pc.localDescription) return;
-
-      const sdp = entry.pc.localDescription.toJSON();
-      const sentOverDc = this.sendDataChannelMessage(
-        entry.peerIdSafe,
-        { type: 'renegotiate_offer', fromPeerIdSafe: this.localPeerIdSafe, sdp },
-        entry.sessionToken
-      );
-
-      if (!sentOverDc) {
-        await this.callbacks.onSignalOffer?.(entry.peerIdSafe, sdp, entry.sessionToken);
+    return this.enqueuePeerTask(entry, async () => {
+      if (entry.pc.connectionState === 'closed') return;
+      if (entry.makingOffer || entry.pc.signalingState !== 'stable') {
+        entry.pendingRenegotiation = true;
+        return;
       }
-    } finally {
-      entry.makingOffer = false;
-    }
+
+      entry.pendingRenegotiation = false;
+      entry.makingOffer = true;
+      entry.canEmitIce = false;
+      try {
+        const offer = await entry.pc.createOffer();
+        await entry.pc.setLocalDescription(offer);
+        if (entry.pc.localDescription) {
+          const sdp = entry.pc.localDescription.toJSON();
+          const sentOverDc =
+            this.isDataChannelTransportHealthy(entry) &&
+            this.sendDataChannelMessage(
+              entry.peerIdSafe,
+              { type: 'renegotiate_offer', fromPeerIdSafe: this.localPeerIdSafe, sdp },
+              entry.sessionToken
+            );
+
+          if (!sentOverDc) {
+            await this.callbacks.onSignalOffer?.(entry.peerIdSafe, sdp, entry.sessionToken);
+          }
+        }
+        entry.canEmitIce = true;
+        this.flushPendingLocalIce(entry);
+        this.scheduleOfferTimeout(entry);
+      } finally {
+        entry.makingOffer = false;
+        entry.canEmitIce = true;
+        if (entry.pc.localDescription) {
+          this.flushPendingLocalIce(entry);
+        }
+      }
+    });
   }
 
   async renegotiateAllPeers(): Promise<void> {
@@ -788,14 +1192,68 @@ export class WebRtcStreamEngine implements IStreamEngine {
     }
   }
 
+  hasPeer(peerIdSafe: string): boolean {
+    return this.peers.has(peerIdSafe);
+  }
+
+  isPeerHealthy(peerIdSafe: string): boolean {
+    const entry = this.peers.get(peerIdSafe);
+    if (!entry) return false;
+    if (entry.pc.connectionState === 'closed' || entry.pc.connectionState === 'failed') {
+      return false;
+    }
+    if (entry.pc.iceConnectionState === 'closed' || entry.pc.iceConnectionState === 'failed') {
+      return false;
+    }
+    if (entry.initialHandshakeDone && entry.dataChannel?.readyState !== 'open') {
+      return false;
+    }
+    return true;
+  }
+
+  pingAndCleanupPeers(): string[] {
+    const now = Date.now();
+    const evicted: string[] = [];
+
+    for (const [peerIdSafe, entry] of Array.from(this.peers.entries())) {
+      if (!this.isPeerHealthy(peerIdSafe)) {
+        this.closePeer(peerIdSafe);
+        evicted.push(peerIdSafe);
+        continue;
+      }
+
+      if (!entry.initialHandshakeDone && now - entry.createdAt > 12000) {
+        this.closePeer(peerIdSafe);
+        evicted.push(peerIdSafe);
+        continue;
+      }
+
+      if (!entry.initialHandshakeDone || entry.dataChannel?.readyState !== 'open') {
+        continue;
+      }
+
+      if (now - entry.lastSeenAt > 4500) {
+        entry.missedPingCount += 1;
+        if (entry.missedPingCount >= 3) {
+          this.closePeer(peerIdSafe);
+          evicted.push(peerIdSafe);
+          continue;
+        }
+      }
+
+      this.sendDataChannelMessage(peerIdSafe, { type: 'ping', sentAt: now }, entry.sessionToken);
+    }
+
+    return evicted;
+  }
+
   closePeer(remotePeerIdSafe: string): void {
-    const entry = this.peers.get(remotePeerIdSafe);
     this.expectedTokens.delete(remotePeerIdSafe);
+    const entry = this.peers.get(remotePeerIdSafe);
     if (!entry) return;
 
-    entry.dataChannel?.close();
-    entry.pc.close();
     this.peers.delete(remotePeerIdSafe);
+    this.detachAndClosePeerEntry(entry);
     this.callbacks.onRemoteStreamRemoved?.(remotePeerIdSafe);
   }
 

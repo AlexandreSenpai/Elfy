@@ -254,6 +254,10 @@ const SIGNALING_PAYLOAD_PARSERS: Record<SignalingMessageType, SignalingPayloadPa
       candidate,
     };
   },
+  peer_left: (p) => {
+    if (!isNonEmptyString(p.peerIdSafe)) return null;
+    return { type: 'peer_left', peerIdSafe: p.peerIdSafe };
+  },
 };
 
 /** Validates and parses a raw MQTT/BroadcastChannel signaling envelope. */

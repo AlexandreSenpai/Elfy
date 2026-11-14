@@ -1,6 +1,8 @@
 import React from 'react';
 import styles from './MultiStreamHub.module.css';
 import {
+  ConnectionFailureDto,
+  ConnectionFailureStage,
   RoomPeerDto,
   StreamFpsOption,
   StreamItem,
@@ -23,6 +25,7 @@ interface MultiStreamHubProps {
   fullscreenStreamId: string | null;
   systemMetrics: SystemMetricsDto;
   highLoadSuggestion: string | null;
+  connectionFailure?: ConnectionFailureDto | null;
   onToggleShare: () => void | Promise<void>;
   onSetFps: (fps: StreamFpsOption) => void | Promise<void>;
   onToggleFps: () => void | Promise<void>;
@@ -34,8 +37,18 @@ interface MultiStreamHubProps {
   onExitFullscreen: () => void | Promise<void>;
   onMinimizeHub: () => void | Promise<void>;
   onLeaveHub: () => void | Promise<void>;
+  onRetryConnection?: () => void;
+  onDismissConnectionFailure?: () => void;
   onDismissHighLoadSuggestion: () => void;
 }
+
+const FAILURE_STAGE_LABELS: Record<ConnectionFailureStage, string> = {
+  signaling_broker: 'Signaling Broker',
+  sdp_handshake: 'Offer / Answer Handshake',
+  ice_negotiation: 'P2P ICE Negotiation',
+  peer_disconnected: 'Peer Connection Lost',
+  screen_capture: 'Screen Capture',
+};
 
 export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   hubId,
@@ -49,6 +62,7 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   fullscreenStreamId,
   systemMetrics,
   highLoadSuggestion,
+  connectionFailure = null,
   onToggleShare,
   onSetFps,
   onToggleFps,
@@ -60,6 +74,8 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   onExitFullscreen,
   onMinimizeHub,
   onLeaveHub,
+  onRetryConnection,
+  onDismissConnectionFailure,
   onDismissHighLoadSuggestion,
 }) => {
   const fullscreenStream =
@@ -113,6 +129,56 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   return (
     <div className={styles.hubShell} data-testid="multi-stream-hub">
       <main className={styles.mainCanvas}>
+        {connectionFailure && (
+          <div className={styles.failureAlertBar} data-testid="connection-failure-alert" role="alert">
+            <div className={styles.failureAlertBody}>
+              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                error_outline
+              </span>
+              <div className={styles.failureAlertCopy}>
+                <div className={styles.failureAlertTitle}>
+                  <span>Connection Failed</span>
+                  <span className={styles.failureStageBadge} data-testid="connection-failure-stage">
+                    {FAILURE_STAGE_LABELS[connectionFailure.stage]}
+                  </span>
+                </div>
+                <p className={styles.failureAlertReason} data-testid="connection-failure-reason">
+                  {connectionFailure.reason}
+                </p>
+                {connectionFailure.details && (
+                  <p className={styles.failureAlertDetails} data-testid="connection-failure-details">
+                    {connectionFailure.details}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className={styles.loadAlertActions}>
+              {onRetryConnection && (
+                <button
+                  className={styles.failureRetryBtn}
+                  data-testid="retry-connection-btn"
+                  onClick={onRetryConnection}
+                  type="button"
+                >
+                  Reconnect
+                </button>
+              )}
+              {onDismissConnectionFailure && (
+                <button
+                  aria-label="Dismiss connection failure alert"
+                  className={styles.loadDismissBtn}
+                  data-testid="dismiss-connection-failure-btn"
+                  onClick={onDismissConnectionFailure}
+                  type="button"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                    close
+                  </span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {highLoadSuggestion && (
           <div className={styles.loadAlertBar} role="status">
             <div className={styles.loadAlertText}>

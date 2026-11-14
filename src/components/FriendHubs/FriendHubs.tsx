@@ -4,7 +4,8 @@ import { ActiveMinimizedHubDto, FriendHubViewModel, HubLiveState, UserProfile } 
 import { sanitizeHubCode } from '../../domain/validators';
 import { formatFullPeerTag } from '../../utils/hubTopics';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
-import { hideMainWindowTauri, isTauri, startDraggingTauri } from '../../utils/tauri';
+import { beginWindowDragOnMove, hideMainWindowTauri, isTauri, quitAppTauri } from '../../utils/tauri';
+import { DockContextMenu, useDockContextMenu } from '../DockContextMenu/DockContextMenu';
 
 interface FriendHubsProps {
   profile: UserProfile;
@@ -74,6 +75,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
   const [copied, setCopied] = useState(false);
   const [joinCode, setJoinCode] = useState('');
   const [joinError, setJoinError] = useState<string | null>(null);
+  const { menuPosition, closeMenu, handleDockContextMenu } = useDockContextMenu();
 
   const fullTag = formatFullPeerTag(profile.nickname, profile.peerTag);
   const myHub = `elfy/hub/${fullTag}`;
@@ -111,7 +113,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
     if (target?.closest('button, input, select, textarea, a, [role="button"], [data-no-drag]')) {
       return;
     }
-    startDraggingTauri();
+    beginWindowDragOnMove(e.clientX, e.clientY);
   };
 
   const renderHubCard = (hub: FriendHubViewModel) => {
@@ -203,9 +205,18 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
 
   return (
     <div className={styles.wrapper}>
+      <DockContextMenu position={menuPosition} onClose={closeMenu} />
       <div className={styles.container}>
-        <header className={styles.header} onMouseDown={handleMouseDown}>
-          <div className={styles.headerLeft}>
+        <header
+          className={styles.header}
+          onContextMenu={handleDockContextMenu}
+          onMouseDown={handleMouseDown}
+        >
+          <div
+            className={styles.headerLeft}
+            data-testid="dock-brand-trigger"
+            title="Right-click for Elfy options"
+          >
             <div className={styles.mascotLogo}>
               <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" />
             </div>
@@ -449,12 +460,26 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
               <span>Persona</span>
             </button>
             {isTauri() && (
-              <button className={styles.footerBtn} onClick={() => void handleHideWindow()} type="button">
-                <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
-                  visibility_off
-                </span>
-                <span>Hide</span>
-              </button>
+              <>
+                <button className={styles.footerBtn} onClick={() => void handleHideWindow()} type="button">
+                  <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
+                    visibility_off
+                  </span>
+                  <span>Hide</span>
+                </button>
+                <button
+                  className={styles.footerBtn}
+                  data-testid="quit-elfy-footer-btn"
+                  onClick={() => void quitAppTauri()}
+                  title="Close Elfy Completely"
+                  type="button"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
+                    power_settings_new
+                  </span>
+                  <span>Quit</span>
+                </button>
+              </>
             )}
           </div>
         </footer>

@@ -61,21 +61,37 @@ fn close_register_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-async fn open_stream_window(
-    app: tauri::AppHandle,
+fn build_stream_fragment(
     hub_id: Option<String>,
     auto_start: bool,
-) -> Result<(), String> {
+    joined_as: Option<String>,
+) -> String {
     let hub = hub_id.unwrap_or_default();
-    let fragment = format!(
+    let base = format!(
         "/stream?hubId={}&autoStart={}",
         urlencoding::encode(&hub),
         auto_start
     );
 
+    match joined_as.as_deref() {
+        Some("owner") => format!("{base}&joinedAs=owner"),
+        Some("guest") => format!("{base}&joinedAs=guest"),
+        _ => base,
+    }
+}
+
+#[tauri::command]
+async fn open_stream_window(
+    app: tauri::AppHandle,
+    hub_id: Option<String>,
+    auto_start: bool,
+    joined_as: Option<String>,
+) -> Result<(), String> {
+    let fragment = build_stream_fragment(hub_id, auto_start, joined_as);
+
     if let Some(window) = app.get_webview_window("stream") {
         navigate_window_hash(&window, &fragment)?;
+        let _ = window.unminimize();
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
@@ -90,6 +106,17 @@ async fn open_stream_window(
         .build()
         .map_err(|e| e.to_string())?;
 
+    Ok(())
+}
+
+#[tauri::command]
+fn restore_stream_window(app: tauri::AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("stream") else {
+        return Ok(());
+    };
+    let _ = window.unminimize();
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -127,9 +154,59 @@ fn toggle_maximize_window(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+static MAIN_WINDOW_DRAGGING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static MAIN_DRAG_GUARD_UNTIL_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn is_cursor_inside_window(window: &tauri::WebviewWindow) -> bool {
+    let Ok(cursor) = window.cursor_position() else {
+        return false;
+    };
+    let Ok(pos) = window.outer_position() else {
+        return false;
+    };
+    let Ok(size) = window.outer_size() else {
+        return false;
+    };
+
+    let left = pos.x as f64;
+    let top = pos.y as f64;
+    let right = left + size.width as f64;
+    let bottom = top + size.height as f64;
+    cursor.x >= left && cursor.x <= right && cursor.y >= top && cursor.y <= bottom
+}
+
 #[tauri::command]
 fn start_dragging(window: tauri::WebviewWindow) -> Result<(), String> {
-    window.start_dragging().map_err(|e| e.to_string())
+    let is_main = window.label() == "main";
+    if is_main {
+        MAIN_WINDOW_DRAGGING.store(true, std::sync::atomic::Ordering::SeqCst);
+        MAIN_DRAG_GUARD_UNTIL_MS.store(
+            now_epoch_ms().saturating_add(1500),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+
+    let result = window.start_dragging().map_err(|e| e.to_string());
+
+    if is_main {
+        MAIN_DRAG_GUARD_UNTIL_MS.store(
+            now_epoch_ms().saturating_add(500),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        MAIN_WINDOW_DRAGGING.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = window.set_focus();
+    }
+
+    result
 }
 
 #[tauri::command]
@@ -147,10 +224,24 @@ fn configure_main_window(app: &tauri::App) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "Main window not found".to_string())?;
     let w = window.clone();
-    window.on_window_event(move |event| {
-        if let WindowEvent::Focused(false) = event {
+    window.on_window_event(move |event| match event {
+        WindowEvent::Moved(_) => {
+            MAIN_DRAG_GUARD_UNTIL_MS.store(
+                now_epoch_ms().saturating_add(400),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        WindowEvent::Focused(false) => {
+            let dragging = MAIN_WINDOW_DRAGGING.load(std::sync::atomic::Ordering::SeqCst);
+            let guarded =
+                now_epoch_ms() < MAIN_DRAG_GUARD_UNTIL_MS.load(std::sync::atomic::Ordering::SeqCst);
+            if dragging || guarded || is_cursor_inside_window(&w) {
+                let _ = w.set_focus();
+                return;
+            }
             let _ = w.hide();
         }
+        _ => {}
     });
     Ok(())
 }
@@ -181,13 +272,61 @@ fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let _ = window.set_focus();
 }
 
+static INSTANCE_LOCK: std::sync::OnceLock<std::fs::File> = std::sync::OnceLock::new();
+
+pub fn try_acquire_lock_file(path: &std::path::Path) -> Option<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0);
+    }
+
+    options.open(path).ok()
+}
+
+fn acquire_single_instance_lock() -> bool {
+    if INSTANCE_LOCK.get().is_some() {
+        return true;
+    }
+
+    let lock_path = std::env::temp_dir().join("elfy_single_instance.lock");
+    let Some(file) = try_acquire_lock_file(&lock_path) else {
+        return false;
+    };
+
+    let _ = INSTANCE_LOCK.set(file);
+    true
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
-    let menu = MenuBuilder::new(app).build()?;
+    let menu = MenuBuilder::new(app)
+        .text("open_elfy", "Open / Hide Elfy")
+        .separator()
+        .text("quit_elfy", "Close Elfy")
+        .build()?;
     let icon = tauri::include_image!("../public/elfy.ico");
 
     TrayIconBuilder::new()
         .icon(icon)
         .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open_elfy" => toggle_main_window_visibility(app),
+            "quit_elfy" => app.exit(0),
+            _ => {}
+        })
         .on_tray_icon_event(|tray, event| {
             tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
             if let TrayIconEvent::DoubleClick {
@@ -205,6 +344,10 @@ fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if !acquire_single_instance_lock() {
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_positioner::init())
@@ -221,6 +364,7 @@ pub fn run() {
             show_register_window,
             close_register_window,
             open_stream_window,
+            restore_stream_window,
             close_stream_window,
             hide_main_window,
             minimize_window,
@@ -229,6 +373,7 @@ pub fn run() {
             toggle_fullscreen,
             set_fullscreen,
             is_fullscreen,
+            quit_app,
             db::db_get_or_init_profile,
             db::db_update_profile,
             db::db_set_telemetry_consent,
@@ -239,4 +384,44 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::try_acquire_lock_file;
+
+    #[test]
+    fn single_instance_lock_prevents_concurrent_holders() {
+        let unique = format!(
+            "elfy_lock_test_{}_{}.lock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let lock_path = std::env::temp_dir().join(unique);
+
+        {
+            let first = try_acquire_lock_file(&lock_path);
+            assert!(first.is_some(), "First instance must acquire the lock file");
+
+            #[cfg(windows)]
+            {
+                let second = try_acquire_lock_file(&lock_path);
+                assert!(
+                    second.is_none(),
+                    "Second instance must fail while first holds the exclusive lock"
+                );
+            }
+        }
+
+        let after_release = try_acquire_lock_file(&lock_path);
+        assert!(
+            after_release.is_some(),
+            "Lock file must be acquirable after first instance releases it"
+        );
+        drop(after_release);
+        let _ = std::fs::remove_file(&lock_path);
+    }
 }

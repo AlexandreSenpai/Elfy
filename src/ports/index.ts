@@ -1,4 +1,5 @@
 import {
+  ConnectionFailureDto,
   DataChannelEnvelopeDto,
   DataChannelPayload,
   FriendHubRecordDto,
@@ -59,6 +60,7 @@ export interface StreamEngineCallbacks {
   onRemoteStream?: (peerIdSafe: string, stream: MediaStream) => void;
   onRemoteStreamRemoved?: (peerIdSafe: string) => void;
   onPeerConnectionStateChange?: (peerIdSafe: string, state: RTCPeerConnectionState) => void;
+  onPeerConnectionError?: (failure: ConnectionFailureDto) => void;
   onDataChannelOpen?: (peerIdSafe: string) => void;
   onDataChannelMessage?: (peerIdSafe: string, message: DataChannelEnvelopeDto) => void;
   onSignalOffer?: (
@@ -128,6 +130,9 @@ export interface IStreamEngine {
   renegotiateAllPeers(): Promise<void>;
   closePeer(remotePeerIdSafe: string): void;
   closeAllPeers(): void;
+  hasPeer(peerIdSafe: string): boolean;
+  isPeerHealthy(peerIdSafe: string): boolean;
+  pingAndCleanupPeers(): string[];
   getConnectedPeerIds(): string[];
   getStatsSnapshot(): Promise<WebRtcStatsSnapshot>;
 }

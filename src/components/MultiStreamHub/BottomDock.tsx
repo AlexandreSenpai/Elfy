@@ -1,6 +1,7 @@
 import React from 'react';
 import styles from './BottomDock.module.css';
 import { StreamFpsOption, SystemMetricsDto, WatchLayoutMode } from '../../domain/dtos';
+import { DockContextMenu, useDockContextMenu } from '../DockContextMenu/DockContextMenu';
 
 interface BottomDockProps {
   isDeafened: boolean;
@@ -34,6 +35,7 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   systemMetrics,
   onLeaveHub,
 }) => {
+  const { menuPosition, closeMenu, handleDockContextMenu } = useDockContextMenu();
   const isGridMode = layoutMode === 'grid';
   const cpuPct = Math.round(systemMetrics.cpuUsagePercent);
   const ramMb = Math.round(systemMetrics.memoryUsedMb);
@@ -42,8 +44,14 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   );
 
   return (
-    <footer className={styles.dockWrapper} data-testid="bottom-dock">
-      <div className={styles.dockContainer}>
+    <>
+      <footer
+        className={styles.dockWrapper}
+        data-testid="bottom-dock"
+        onContextMenu={handleDockContextMenu}
+        title="Right-click for Elfy options"
+      >
+        <div className={styles.dockContainer}>
         <button
           aria-label={isDeafened ? 'Undeafen Audio' : 'Deafen Audio'}
           className={`${styles.iconBtn} ${isDeafened ? styles.iconBtnDeafened : ''}`}
@@ -143,6 +151,8 @@ export const BottomDock: React.FC<BottomDockProps> = ({
         </button>
       </div>
     </footer>
+      <DockContextMenu position={menuPosition} onClose={closeMenu} />
+    </>
   );
 };
 

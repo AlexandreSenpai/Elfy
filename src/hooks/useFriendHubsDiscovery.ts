@@ -19,7 +19,7 @@ import {
   normalizeHubTopic,
   toSafePeerTag,
 } from '../utils/hubTopics';
-import { isTauri, openStreamWindowTauri } from '../utils/tauri';
+import { isTauri, restoreStreamWindowTauri } from '../utils/tauri';
 
 export interface AddFriendHubMeta {
   ownerNickname?: string;
@@ -330,7 +330,7 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
 
     await localWindowBus.publish({ type: 'restore_hub_requested', hubId: target.hubId });
     if (isTauri()) {
-      await openStreamWindowTauri(target.hubId, false, target.role);
+      await restoreStreamWindowTauri();
     }
   }, []);
 

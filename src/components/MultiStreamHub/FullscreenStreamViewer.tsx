@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './FullscreenStreamViewer.module.css';
 import { StreamItem } from '../../domain/dtos';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
+import { getVolumeIcon, useAttachedVideoStream } from './StreamTile';
 
 interface FullscreenStreamViewerProps {
   stream: StreamItem;
@@ -9,12 +10,6 @@ interface FullscreenStreamViewerProps {
   onExitFullscreen: () => void | Promise<void>;
   onVolumeChange: (vol: number) => void;
 }
-
-const getVolumeIcon = (volume: number): string => {
-  if (volume === 0) return 'volume_off';
-  if (volume < 50) return 'volume_down';
-  return 'volume_up';
-};
 
 export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
   stream,
@@ -26,37 +21,7 @@ export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
   const hideTimerRef = useRef<number | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
 
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
-
-    if (!mediaStream) {
-      videoEl.srcObject = null;
-      return;
-    }
-
-    const syncPlayback = (): void => {
-      videoEl.srcObject = mediaStream;
-      videoEl.play().catch(() => {});
-    };
-
-    syncPlayback();
-    mediaStream.addEventListener('addtrack', syncPlayback);
-    mediaStream.addEventListener('removetrack', syncPlayback);
-
-    return () => {
-      mediaStream.removeEventListener('addtrack', syncPlayback);
-      mediaStream.removeEventListener('removetrack', syncPlayback);
-      videoEl.srcObject = null;
-    };
-  }, [mediaStream]);
-
-  useEffect(() => {
-    const videoEl = videoRef.current;
-    if (!videoEl) return;
-    videoEl.muted = stream.isLocal || stream.volume === 0;
-    videoEl.volume = Math.max(0, Math.min(1, stream.volume / 100));
-  }, [stream.isLocal, stream.volume]);
+  useAttachedVideoStream(videoRef, mediaStream, stream.isLocal, stream.volume);
 
   const showControlsTemporarily = useCallback(() => {
     setControlsVisible(true);
@@ -108,7 +73,6 @@ export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
             ref={videoRef}
             autoPlay
             playsInline
-            muted={stream.isLocal || stream.volume === 0}
             disablePictureInPicture
             className={styles.fullscreenVideo}
           />

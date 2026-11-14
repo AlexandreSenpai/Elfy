@@ -5,6 +5,20 @@ export type KnockStatus = 'idle' | 'knocking' | 'accepted' | 'rejected' | 'timeo
 export type WatchLayoutMode = 'grid' | 'spotlight' | 'fullscreen';
 export type ScreenMode = 'multi-stream' | 'friend-hubs' | 'nickname' | 'left-hub';
 export type HubLiveState = 'broadcasting' | 'online' | 'offline';
+export type ConnectionFailureStage =
+  | 'signaling_broker'
+  | 'sdp_handshake'
+  | 'ice_negotiation'
+  | 'peer_disconnected'
+  | 'screen_capture';
+
+export interface ConnectionFailureDto {
+  stage: ConnectionFailureStage;
+  reason: string;
+  details?: string;
+  peerIdSafe?: string;
+  timestamp: number;
+}
 
 export interface AvatarOption {
   id: string;
@@ -214,7 +228,8 @@ export type SignalingPayload =
   | KnockDecisionPayload
   | WebRtcOfferPayload
   | WebRtcAnswerPayload
-  | WebRtcIcePayload;
+  | WebRtcIcePayload
+  | PeerLeftPayload;
 
 export type SignalingMessageType = SignalingPayload['type'];
 

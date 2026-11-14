@@ -88,8 +88,17 @@ export const openStreamWindowTauri = async (
   joinedAs?: RoomRole
 ): Promise<void> => {
   if (!isTauri()) return;
-  await safeInvoke('open_stream_window', { hubId, autoStart });
+  await safeInvoke('open_stream_window', { hubId, autoStart, joinedAs });
   await emit('request-start-stream', { hubId, autoStart, joinedAs });
+};
+
+export const restoreStreamWindowTauri = async (): Promise<void> => {
+  if (!isTauri()) return;
+  try {
+    await invoke('restore_stream_window');
+  } catch {
+    await getCurrentWindow().unminimize().catch(() => {});
+  }
 };
 
 export const closeStreamWindowTauri = async (): Promise<void> => {
@@ -109,6 +118,15 @@ export const minimizeWindowTauri = async (): Promise<void> => {
   }
 };
 
+export const isWindowMinimizedTauri = async (): Promise<boolean> => {
+  if (!isTauri()) return false;
+  try {
+    return await getCurrentWindow().isMinimized();
+  } catch {
+    return false;
+  }
+};
+
 export const toggleMaximizeWindowTauri = async (): Promise<void> => {
   if (!isTauri()) return;
   try {
@@ -120,11 +138,44 @@ export const toggleMaximizeWindowTauri = async (): Promise<void> => {
 
 export const startDraggingTauri = (): void => {
   if (!isTauri()) return;
-  try {
+  void invokeOrThrow('start_dragging').catch(() => {
     getCurrentWindow().startDragging().catch(() => {});
-  } catch {
-    void safeInvoke('start_dragging');
-  }
+  });
+};
+
+export const beginWindowDragOnMove = (
+  startX: number,
+  startY: number,
+  thresholdPx = 4
+): void => {
+  if (!isTauri()) return;
+  let settled = false;
+
+  const cleanup = (): void => {
+    if (settled) return;
+    settled = true;
+    window.removeEventListener('pointermove', onPointerMove, true);
+    window.removeEventListener('pointerup', cleanup, true);
+    window.removeEventListener('pointercancel', cleanup, true);
+    window.removeEventListener('blur', cleanup);
+  };
+
+  const onPointerMove = (moveEvent: PointerEvent): void => {
+    if ((moveEvent.buttons & 1) === 0) {
+      cleanup();
+      return;
+    }
+    const dx = moveEvent.clientX - startX;
+    const dy = moveEvent.clientY - startY;
+    if (Math.hypot(dx, dy) < thresholdPx) return;
+    cleanup();
+    startDraggingTauri();
+  };
+
+  window.addEventListener('pointermove', onPointerMove, true);
+  window.addEventListener('pointerup', cleanup, true);
+  window.addEventListener('pointercancel', cleanup, true);
+  window.addEventListener('blur', cleanup);
 };
 
 const setBrowserFullscreen = async (fullscreen: boolean): Promise<void> => {
@@ -224,4 +275,8 @@ export const dbRemoveFriendHubTauri = (hubId: string): Promise<FriendHubRecordDt
 
 export const getSystemMetricsTauri = (): Promise<HostResourceMetricsDto | null> => {
   return safeInvoke<HostResourceMetricsDto>('get_system_metrics');
+};
+
+export const quitAppTauri = async (): Promise<void> => {
+  await safeInvoke('quit_app');
 };

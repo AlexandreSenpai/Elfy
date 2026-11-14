@@ -43,13 +43,14 @@
   flex-shrink: 0;
 }
 
-.headerLeft,
 .brandTitle,
 .mascotLogo {
   pointer-events: none;
 }
 
 .headerLeft {
+  pointer-events: auto;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 8px;
