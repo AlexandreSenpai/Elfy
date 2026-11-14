@@ -624,6 +624,7 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
 
   const ownerPage = await initPeerPage(context, ownerUid);
   await openHomeAndSetConsent(ownerPage, 'decline');
+  const ownerHubCode = await readMyHubCode(ownerPage);
 
   // Left-click and Ctrl+Left-click on Companion dock/brand must NOT open context menu
   await ownerPage.getByTestId('dock-brand-trigger').click({ button: 'left' });
@@ -735,4 +736,47 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
   await expect(phantomRoom.getByTestId('connection-failure-details')).toContainText(
     'host=PhantomHost_9999'
   );
+
+  // Verify knock toast notification records Allow/Decline actions and dispatching accept admits guest
+  const toastGuestUid = createRunUid('t11-toast-guest');
+  const toastGuestPage = await initPeerPage(context, toastGuestUid);
+  await openHomeAndSetConsent(toastGuestPage, 'decline');
+  const toastGuestHubCode = await readMyHubCode(toastGuestPage);
+  const toastGuestPeerSafe = extractPeerTag(toastGuestHubCode).replace(/^#/, '');
+  const secondGuestRoom = await knockGuestIntoHub(toastGuestPage, ownerHubCode);
+
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  const recordedToast = await ownerRoom.evaluate(() => {
+    const win = window as unknown as {
+      __ELFY_LAST_KNOCK_NOTIFICATION__?: {
+        actions?: string[];
+        peerIdSafe?: string;
+        hubId?: string;
+        replyTopic?: string;
+      };
+    };
+    return win.__ELFY_LAST_KNOCK_NOTIFICATION__ ?? null;
+  });
+  expect(recordedToast).not.toBeNull();
+  expect(recordedToast?.actions).toEqual(['Allow', 'Decline']);
+  expect(recordedToast?.peerIdSafe).toBe(toastGuestPeerSafe);
+
+  await ownerRoom.evaluate((payload) => {
+    window.dispatchEvent(
+      new CustomEvent('elfy-knock-toast-action', {
+        detail: {
+          action: 'accept',
+          peerIdSafe: payload?.peerIdSafe ?? '',
+          displayName: 'Guest',
+          peerTag: '',
+          hubId: payload?.hubId ?? '',
+          replyTopic: payload?.replyTopic ?? '',
+        },
+      })
+    );
+  }, recordedToast);
+
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeHidden();
+  await expect(secondGuestRoom.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(secondGuestRoom.getByTestId('multi-stream-hub')).toBeVisible();
 });

@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
+import { emit, listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { commands } from '@skipperndt/plugin-machine-uid';
 import {
@@ -277,11 +277,66 @@ export const getSystemMetricsTauri = (): Promise<HostResourceMetricsDto | null> 
   return safeInvoke<HostResourceMetricsDto>('get_system_metrics');
 };
 
+export interface KnockToastActionPayload {
+  action: 'accept' | 'reject' | 'open';
+  peerIdSafe: string;
+  displayName: string;
+  peerTag: string;
+  hubId: string;
+  replyTopic: string;
+}
+
+export interface KnockNotificationRequest {
+  displayName: string;
+  peerTag: string;
+  peerIdSafe?: string;
+  hubId?: string;
+  replyTopic?: string;
+}
+
 export const showKnockNotificationTauri = async (
-  displayName: string,
-  peerTag: string
+  request: KnockNotificationRequest
 ): Promise<void> => {
-  await safeInvoke('show_knock_notification', { displayName, peerTag });
+  await safeInvoke('show_knock_notification', {
+    displayName: request.displayName,
+    peerTag: request.peerTag,
+    peerIdSafe: request.peerIdSafe ?? null,
+    hubId: request.hubId ?? null,
+    replyTopic: request.replyTopic ?? null,
+  });
+};
+
+export const listenKnockToastActionTauri = async (
+  handler: (payload: KnockToastActionPayload) => void
+): Promise<() => void> => {
+  const onDomEvent = (event: Event): void => {
+    const custom = event as CustomEvent<KnockToastActionPayload>;
+    if (custom.detail && typeof custom.detail.action === 'string') {
+      handler(custom.detail);
+    }
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('elfy-knock-toast-action', onDomEvent);
+  }
+
+  let unlistenTauri: (() => void) | null = null;
+  if (isTauri()) {
+    try {
+      unlistenTauri = await listen<KnockToastActionPayload>('knock-toast-action', (event) => {
+        if (event.payload) handler(event.payload);
+      });
+    } catch {
+      // Ignore listener setup failures in non-Tauri contexts.
+    }
+  }
+
+  return () => {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('elfy-knock-toast-action', onDomEvent);
+    }
+    unlistenTauri?.();
+  };
 };
 
 export const quitAppTauri = async (): Promise<void> => {

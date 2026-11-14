@@ -929,6 +929,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-opener",
  "tauri-plugin-positioner",
+ "tauri-winrt-notification",
  "urlencoding",
 ]
 

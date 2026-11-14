@@ -1,16 +1,27 @@
 import { sendNotification } from '@tauri-apps/plugin-notification';
 import { isTauri, showKnockNotificationTauri } from './tauri';
 
+export interface KnockNotificationMeta {
+  peerIdSafe?: string;
+  hubId?: string;
+  replyTopic?: string;
+}
+
 export interface RecordedKnockNotification {
   title: string;
   body: string;
   peerTag: string;
+  peerIdSafe?: string;
+  hubId?: string;
+  replyTopic?: string;
+  actions: string[];
   timestamp: number;
 }
 
 interface NotificationWindowGlobals {
   __ELFY_KNOCK_SOUNDS_PLAYED__?: number;
   __ELFY_NOTIFICATIONS_SHOWN__?: RecordedKnockNotification[];
+  __ELFY_LAST_KNOCK_NOTIFICATION__?: RecordedKnockNotification;
   webkitAudioContext?: typeof AudioContext;
 }
 
@@ -109,10 +120,20 @@ export const playKnockSound = (dedupKey?: string): void => {
 /**
  * Sends a Windows OS notification (in Tauri) and/or Web Notification when a user knocks.
  */
-export const showKnockNotification = (displayName: string, peerTag: string): void => {
+export const showKnockNotification = (
+  displayName: string,
+  peerTag: string,
+  meta?: KnockNotificationMeta
+): void => {
   const cleanName = displayName.trim() || 'Someone';
   const cleanTag = peerTag.trim();
-  if (shouldDeduplicateKnock('notify', cleanTag || cleanName, recentKnockNotifyMap)) {
+  if (
+    shouldDeduplicateKnock(
+      'notify',
+      meta?.peerIdSafe || cleanTag || cleanName,
+      recentKnockNotifyMap
+    )
+  ) {
     return;
   }
 
@@ -126,16 +147,28 @@ export const showKnockNotification = (displayName: string, peerTag: string): voi
     if (!Array.isArray(win.__ELFY_NOTIFICATIONS_SHOWN__)) {
       win.__ELFY_NOTIFICATIONS_SHOWN__ = [];
     }
-    win.__ELFY_NOTIFICATIONS_SHOWN__.push({
+    const recorded: RecordedKnockNotification = {
       title,
       body,
       peerTag: cleanTag,
+      peerIdSafe: meta?.peerIdSafe,
+      hubId: meta?.hubId,
+      replyTopic: meta?.replyTopic,
+      actions: ['Allow', 'Decline'],
       timestamp: Date.now(),
-    });
+    };
+    win.__ELFY_NOTIFICATIONS_SHOWN__.push(recorded);
+    win.__ELFY_LAST_KNOCK_NOTIFICATION__ = recorded;
   }
 
   if (isTauri()) {
-    void showKnockNotificationTauri(cleanName, cleanTag).catch(() => {
+    void showKnockNotificationTauri({
+      displayName: cleanName,
+      peerTag: cleanTag,
+      peerIdSafe: meta?.peerIdSafe,
+      hubId: meta?.hubId,
+      replyTopic: meta?.replyTopic,
+    }).catch(() => {
       try {
         sendNotification({ title, body });
       } catch {

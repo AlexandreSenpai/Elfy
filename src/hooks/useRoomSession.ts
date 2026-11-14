@@ -46,6 +46,8 @@ import {
 } from '../utils/hubTopics';
 import { playKnockSound, showKnockNotification } from '../utils/notifications';
 import {
+  KnockToastActionPayload,
+  listenKnockToastActionTauri,
   minimizeWindowTauri,
   restoreStreamWindowTauri,
   setFullscreenTauri,
@@ -261,6 +263,8 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
   hostInfoRef.current = hostInfo;
 
   const peersRef = useRef<RoomPeerDto[]>([]);
+  const pendingKnocksRef = useRef<PendingKnock[]>([]);
+  pendingKnocksRef.current = pendingKnocks;
   const streamsRef = useRef<StreamItem[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
   const isSharingRef = useRef<boolean>(false);
@@ -1200,7 +1204,11 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     };
 
     playKnockSound(payload.peerIdSafe);
-    showKnockNotification(payload.displayName, payload.peerTag);
+    showKnockNotification(payload.displayName, payload.peerTag, {
+      peerIdSafe: payload.peerIdSafe,
+      hubId: hubRef.current,
+      replyTopic: payload.replyTopic,
+    });
 
     setPendingKnocks((prev) => [
       knockItem,
@@ -1721,6 +1729,102 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       busHandlers[message.type](message);
     });
   }, [leaveRoom, restoreHub]);
+
+  // Handle interactive Windows Toast action buttons ("Allow" / "Decline" / body click).
+  useEffect(() => {
+    if (resolvedRole !== 'owner' || !normalizedHub || hasLeftRoom || waitingForProfile) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const handleToastAction = (payload: KnockToastActionPayload): void => {
+      if (cancelled || roleRef.current !== 'owner' || !hubRef.current) return;
+      if (payload.hubId && normalizeHubTopic(payload.hubId) !== hubRef.current) return;
+
+      if (typeof localStorage !== 'undefined' && payload.peerIdSafe) {
+        try {
+          localStorage.setItem(
+            'elfy_handled_toast_peer',
+            `${payload.peerIdSafe}:${Date.now()}`
+          );
+        } catch {
+          // Ignore storage quota/access errors.
+        }
+      }
+
+      if (payload.action === 'open') {
+        void restoreHub();
+        return;
+      }
+
+      if (!payload.peerIdSafe) return;
+      if (payload.replyTopic) {
+        knockReplyTopicsRef.current.set(payload.peerIdSafe, payload.replyTopic);
+      }
+
+      const existingKnock = pendingKnocksRef.current.find(
+        (item) => item.peerIdSafe === payload.peerIdSafe
+      );
+      const knockTarget: PendingKnock = existingKnock ?? {
+        id: `k_toast_${payload.peerIdSafe}_${Date.now()}`,
+        peerTag: payload.peerTag || payload.peerIdSafe,
+        peerIdSafe: payload.peerIdSafe,
+        displayName: payload.displayName || 'Guest',
+        avatarUrl: '',
+        timestamp: Date.now(),
+        hubTopic: hubRef.current,
+      };
+
+      if (payload.action === 'accept') {
+        void handleAcceptKnockAction(knockTarget);
+      } else if (payload.action === 'reject') {
+        void handleRejectKnockAction(knockTarget);
+      }
+    };
+
+    const consumeDeferredToastAction = async (): Promise<void> => {
+      if (typeof localStorage === 'undefined') return;
+      try {
+        const raw = localStorage.getItem('elfy_pending_toast_action');
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as KnockToastActionPayload & { timestamp?: number };
+        if (parsed.hubId && normalizeHubTopic(parsed.hubId) !== normalizedHub) return;
+        localStorage.removeItem('elfy_pending_toast_action');
+        if (parsed.timestamp && Date.now() - parsed.timestamp > 20_000) return;
+        await signalingTransport.connect();
+        if (!cancelled) {
+          handleToastAction(parsed);
+        }
+      } catch {
+        // Ignore malformed deferred toast payload.
+      }
+    };
+
+    void consumeDeferredToastAction();
+
+    let unlisten: (() => void) | null = null;
+    void listenKnockToastActionTauri(handleToastAction).then((fn) => {
+      if (cancelled) {
+        fn();
+        return;
+      }
+      unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [
+    handleAcceptKnockAction,
+    handleRejectKnockAction,
+    hasLeftRoom,
+    normalizedHub,
+    resolvedRole,
+    restoreHub,
+    waitingForProfile,
+  ]);
 
   const sampleSystemMetricsOnce = useCallback(async (): Promise<void> => {
     const evictedPeers = webrtcStreamEngine.pingAndCleanupPeers();

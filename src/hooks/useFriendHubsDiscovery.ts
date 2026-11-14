@@ -6,6 +6,7 @@ import {
   FriendHubRecordDto,
   FriendHubViewModel,
   HubStatusRequestPayload,
+  KnockDecisionPayload,
   LocalWindowBusMessage,
   LocalWindowBusMessageType,
   SignalingEnvelopeDto,
@@ -23,7 +24,12 @@ import {
   toSafePeerTag,
 } from '../utils/hubTopics';
 import { playKnockSound, showKnockNotification } from '../utils/notifications';
-import { isTauri, restoreStreamWindowTauri } from '../utils/tauri';
+import {
+  isTauri,
+  listenKnockToastActionTauri,
+  openStreamWindowTauri,
+  restoreStreamWindowTauri,
+} from '../utils/tauri';
 
 export interface AddFriendHubMeta {
   ownerNickname?: string;
@@ -96,6 +102,8 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
   const localPeerIdSafe = toSafePeerTag(profile.nickname, profile.peerTag);
   const localPeerIdRef = useRef<string>(localPeerIdSafe);
   localPeerIdRef.current = localPeerIdSafe;
+  const profileRef = useRef<UserProfile>(profile);
+  profileRef.current = profile;
 
   const recordsRef = useRef<FriendHubRecordDto[]>([]);
   const liveMapRef = useRef<Map<string, FriendHubLiveStatusDto>>(new Map());
@@ -408,11 +416,29 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
     }
 
     const myHub = `elfy/hub/${formatFullPeerTag(profile.nickname, profile.peerTag)}`;
+    const normalizedMyHub = normalizeHubTopic(myHub);
     const myKnockTopic = getKnockTopic(myHub);
     if (!myKnockTopic) return;
 
     let active = true;
     let unsub: (() => void) | null = null;
+    let unlistenToast: (() => void) | null = null;
+
+    const wasHandledByRoom = (peerIdSafe: string): boolean => {
+      if (typeof localStorage === 'undefined') return false;
+      try {
+        const raw = localStorage.getItem('elfy_handled_toast_peer');
+        if (!raw) return false;
+        const sep = raw.lastIndexOf(':');
+        if (sep <= 0) return false;
+        const handledPeer = raw.slice(0, sep);
+        const handledAt = Number(raw.slice(sep + 1));
+        if (!Number.isFinite(handledAt) || Date.now() - handledAt > 5000) return false;
+        return !peerIdSafe || handledPeer === peerIdSafe;
+      } catch {
+        return false;
+      }
+    };
 
     const subscribeOwnerKnocks = async (): Promise<void> => {
       try {
@@ -422,7 +448,11 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
           const payload = envelope.payload;
           if (payload.peerIdSafe === localPeerIdRef.current) return;
           playKnockSound(payload.peerIdSafe);
-          showKnockNotification(payload.displayName, payload.peerTag);
+          showKnockNotification(payload.displayName, payload.peerTag, {
+            peerIdSafe: payload.peerIdSafe,
+            hubId: myHub,
+            replyTopic: payload.replyTopic,
+          });
         });
         if (!active) {
           fn();
@@ -436,9 +466,73 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
 
     void subscribeOwnerKnocks();
 
+    void listenKnockToastActionTauri((actionPayload) => {
+      if (!active) return;
+      if (actionPayload.hubId && normalizeHubTopic(actionPayload.hubId) !== normalizedMyHub) {
+        return;
+      }
+
+      window.setTimeout(() => {
+        if (!active || wasHandledByRoom(actionPayload.peerIdSafe)) return;
+
+        if (actionPayload.action === 'reject') {
+          const fallbackInbox = getGuestInboxTopic(myHub, actionPayload.peerIdSafe);
+          const replyTopic =
+            actionPayload.replyTopic || (fallbackInbox ? `${fallbackInbox}/knock` : '');
+          if (!replyTopic) return;
+
+          const rejectEnvelope: SignalingEnvelopeDto<KnockDecisionPayload> = {
+            version: 1,
+            messageId: createId('msg'),
+            hubId: normalizedMyHub || myHub,
+            senderPeerIdSafe: localPeerIdRef.current,
+            sentAt: Date.now(),
+            payload: {
+              type: 'knock_decision',
+              accepted: false,
+              sessionToken: '',
+              peerRoster: [],
+              hostPeerIdSafe: localPeerIdRef.current,
+              hostDisplayName: profileRef.current.nickname,
+              reason: 'Host declined your entrance request.',
+            },
+          };
+
+          void signalingTransport.connect().then(() => {
+            void signalingTransport.publish(replyTopic, rejectEnvelope);
+          });
+          return;
+        }
+
+        if (actionPayload.action === 'accept' && typeof localStorage !== 'undefined') {
+          try {
+            localStorage.setItem(
+              'elfy_pending_toast_action',
+              JSON.stringify({
+                ...actionPayload,
+                hubId: normalizedMyHub || myHub,
+                timestamp: Date.now(),
+              })
+            );
+          } catch {
+            // Ignore storage quota/access errors.
+          }
+        }
+
+        void openStreamWindowTauri(normalizedMyHub || myHub, false, 'owner');
+      }, 180);
+    }).then((fn) => {
+      if (!active) {
+        fn();
+        return;
+      }
+      unlistenToast = fn;
+    });
+
     return () => {
       active = false;
       unsub?.();
+      unlistenToast?.();
     };
   }, [profile.machineHash, profile.peerTag]);
 
