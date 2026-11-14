@@ -1,4 +1,4 @@
-import { UserProfile } from '../types';
+import { UserProfile } from '../domain/dtos';
 
 /**
  * Converts a nickname and peerTag into a safe MQTT topic segment.
@@ -27,12 +27,13 @@ export const normalizeHubTopic = (rawHub: string): string => {
   if (!rawHub || !rawHub.trim() || rawHub === 'elfy/hub/unknown') {
     return '';
   }
+
   let cleaned = rawHub.trim().replace(/#/g, '_');
   if (!cleaned.startsWith('elfy/hub/')) {
-    // If it started with / or hub/, strip first
     cleaned = cleaned.replace(/^\/?(elfy\/hub\/|hub\/)?/, '');
     cleaned = `elfy/hub/${cleaned}`;
   }
+
   return cleaned.replace(/\/+$/, '');
 };
 
@@ -42,17 +43,29 @@ export const normalizeHubTopic = (rawHub: string): string => {
  */
 export const getKnockTopic = (hubInput: string): string => {
   const normalized = normalizeHubTopic(hubInput);
-  return normalized ? `${normalized}/knock` : '';
+  if (!normalized) return '';
+  return `${normalized}/knock`;
 };
 
 /**
- * Returns the direct peer inbox topic for a specific guest within a hub.
+ * Returns the live discovery probe topic for a given hub.
+ * E.g., "elfy/hub/Mochi_2sintd/probe"
+ */
+export const getProbeTopic = (hubInput: string): string => {
+  const normalized = normalizeHubTopic(hubInput);
+  if (!normalized) return '';
+  return `${normalized}/probe`;
+};
+
+/**
+ * Returns the direct peer inbox topic for a specific peer within a hub.
  * E.g., "elfy/hub/Mochi_2sintd/peer/Luna_eGkjL"
  */
 export const getGuestInboxTopic = (hubInput: string, guestTagSafe: string): string => {
   const normalized = normalizeHubTopic(hubInput);
   if (!normalized) return '';
   const safeGuest = guestTagSafe.replace(/#/g, '_').trim();
+  if (!safeGuest) return '';
   return `${normalized}/peer/${safeGuest}`;
 };
 
@@ -64,15 +77,17 @@ export const extractHostFromHub = (hubInput: string): { displayName: string; tag
   const normalized = normalizeHubTopic(hubInput);
   const slug = normalized.replace(/^elfy\/hub\//, '');
   const lastUnderscore = slug.lastIndexOf('_');
+
   if (lastUnderscore !== -1) {
     return {
       displayName: slug.substring(0, lastUnderscore),
-      tag: `#${slug.substring(lastUnderscore + 1)}`
+      tag: `#${slug.substring(lastUnderscore + 1)}`,
     };
   }
+
   return {
     displayName: slug || 'Host',
-    tag: ''
+    tag: '',
   };
 };
 
@@ -82,5 +97,6 @@ export const extractHostFromHub = (hubInput: string): { displayName: string; tag
 export const isHubOwner = (hubInput: string, profile: UserProfile): boolean => {
   if (!hubInput || !profile) return false;
   const myHubTopic = normalizeHubTopic(`elfy/hub/${toSafePeerTag(profile.nickname, profile.peerTag)}`);
+  if (!myHubTopic) return false;
   return normalizeHubTopic(hubInput).toLowerCase() === myHubTopic.toLowerCase();
 };

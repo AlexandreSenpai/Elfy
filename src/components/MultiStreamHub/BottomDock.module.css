@@ -1,7 +1,6 @@
 .dockWrapper {
   width: 100%;
-  padding-bottom: 20px;
-  padding-top: 8px;
+  padding: 6px 8px 16px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12,11 +11,14 @@
 
 .dockContainer {
   pointer-events: auto;
+  max-width: 100%;
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 8px 16px;
-  border-radius: var(--radius-full);
+  padding: 8px 14px;
+  border-radius: var(--radius-xl);
   background-color: rgba(17, 24, 34, 0.95);
   backdrop-filter: blur(24px);
   border: 1px solid var(--outline-variant);
@@ -27,8 +29,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
   border-radius: 50%;
   background-color: var(--surface-container);
   color: var(--on-surface);
@@ -46,31 +49,25 @@
   transform: scale(0.96);
 }
 
-.iconBtnMuted {
-  background-color: var(--error-bg) !important;
-  color: var(--error) !important;
-  border: 1px solid rgba(255, 95, 86, 0.3);
-}
-
 .iconBtnDeafened {
   background-color: var(--error-bg) !important;
   color: var(--error) !important;
-  border: 1px solid rgba(255, 95, 86, 0.3);
+  border: 1px solid rgba(255, 95, 86, 0.35);
 }
 
 .dockDivider {
   width: 1px;
-  height: 24px;
+  height: 22px;
   background-color: var(--outline-variant);
-  margin: 0 4px;
+  margin: 0 2px;
 }
 
 /* Primary Share Screen button */
 .shareBtn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 18px;
+  gap: 7px;
+  padding: 9px 16px;
   border-radius: var(--radius-full);
   background-color: var(--primary);
   color: #ffffff;
@@ -102,18 +99,45 @@
   background-color: #ff4336;
 }
 
+/* FPS Switcher */
+.pillBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 12px;
+  border-radius: var(--radius-full);
+  background-color: var(--surface-container);
+  color: var(--secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid var(--outline-variant);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pillBtn:hover {
+  background-color: var(--surface-container-high);
+  border-color: var(--secondary);
+}
+
+.pillBtnEconomy {
+  color: var(--tertiary);
+  border-color: rgba(227, 197, 78, 0.45);
+}
+
 /* Layout Mode Switcher */
 .modeBtn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
+  padding: 8px 12px;
   border-radius: var(--radius-full);
   background-color: var(--surface-container);
   color: var(--on-surface);
-  font-size: 13px;
-  font-weight: 500;
-  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--outline-variant);
   cursor: pointer;
   transition: all 0.2s;
 }
@@ -126,13 +150,49 @@
   color: var(--secondary);
 }
 
+/* System & Stream Metrics Badge */
+.metricsBadge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-full);
+  background-color: rgba(7, 10, 14, 0.78);
+  border: 1px solid var(--outline-variant);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+}
+
+.metricsBadgeHigh {
+  border-color: rgba(255, 95, 86, 0.65);
+  background-color: rgba(255, 95, 86, 0.14);
+  color: #ffb4ab;
+}
+
+.metricsDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #10b981;
+  flex-shrink: 0;
+}
+
+.metricsBadgeHigh .metricsDot {
+  background-color: var(--error);
+  animation: pulse 1.2s infinite ease-in-out;
+}
+
 /* Disconnect Button */
 .leaveBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
   border-radius: 50%;
   background-color: var(--error-bg);
   color: var(--error);
@@ -149,4 +209,48 @@
 
 .leaveBtn:active {
   transform: scale(0.96);
+}
+
+@media (max-width: 760px) {
+  .dockWrapper {
+    padding: 4px 6px 10px;
+  }
+
+  .dockContainer {
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: var(--radius-lg);
+  }
+
+  .dockDivider {
+    display: none;
+  }
+
+  .shareBtn {
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+
+  .pillBtn,
+  .modeBtn {
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+
+  .metricsBadge {
+    font-size: 9px;
+    padding: 4px 8px;
+  }
+}
+
+@media (max-width: 420px) {
+  .modeLabel {
+    display: none;
+  }
+
+  .iconBtn,
+  .leaveBtn {
+    width: 34px;
+    height: 34px;
+  }
 }

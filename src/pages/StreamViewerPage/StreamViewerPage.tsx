@@ -1,94 +1,311 @@
-import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import styles from './StreamViewerPage.module.css';
-import { Header } from '../../components/Header/Header';
-import { closeStreamWindowTauri, isTauri, showRegisterWindowTauri } from '../../utils/tauri';
-import { useProfile } from '../../hooks/useProfile';
-import { isHubOwner } from '../../utils/hubTopics';
+import React, { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { StreamerView } from './components/StreamerView';
-import { ViewerView } from './components/ViewerView';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import styles from './StreamViewerPage.module.css';
+import { ChooseNickname } from '../../components/ChooseNickname/ChooseNickname';
+import { GuestKnockGate } from '../../components/GuestKnockGate/GuestKnockGate';
+import { Header } from '../../components/Header/Header';
+import { HostKnockAlert } from '../../components/HostKnockAlert/HostKnockAlert';
+import { MultiStreamHub } from '../../components/MultiStreamHub/MultiStreamHub';
+import { ELFY_MASCOT_ICON } from '../../data/mockData';
+import { RoomRole } from '../../domain/dtos';
+import { useProfile } from '../../hooks/useProfile';
+import { useRoomSession } from '../../hooks/useRoomSession';
+import { isHubOwner } from '../../utils/hubTopics';
+import { closeStreamWindowTauri, isTauri, showRegisterWindowTauri } from '../../utils/tauri';
+
+interface StreamLaunchEventPayload {
+  hubId: string;
+  autoStart?: boolean;
+  joinedAs?: RoomRole;
+}
+
+const parseRoomRole = (value: string | null): RoomRole | null => {
+  if (value === 'owner' || value === 'guest') return value;
+  return null;
+};
 
 export const StreamViewerPage: React.FC = () => {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { profile } = useProfile();
+  const {
+    profile,
+    isLoading: isProfileLoading,
+    isRegistered,
+    telemetryConsent,
+    saveProfile,
+    setTelemetryConsent,
+  } = useProfile();
 
   const urlHubId = searchParams.get('hubId') || '';
   const urlAutoStart = searchParams.get('autoStart') === 'true';
-  const urlJoinedAs = searchParams.get('joinedAs') as 'owner' | 'guest' | null;
+  const urlJoinedAs = parseRoomRole(searchParams.get('joinedAs'));
 
-  const [activeHubSlug, setActiveHubSlug] = useState<string>(urlHubId);
-  const [autoStart, setAutoStart] = useState<boolean>(urlAutoStart);
-  const [joinedAs, setJoinedAs] = useState<'owner' | 'guest'>(() => {
-    if (urlJoinedAs) return urlJoinedAs;
-    if (urlHubId && isHubOwner(urlHubId, profile)) return 'owner';
-    return 'guest';
-  });
+  const [overrideHubSlug, setOverrideHubSlug] = useState<string | null>(null);
+  const [overrideAutoStart, setOverrideAutoStart] = useState<boolean | null>(null);
+  const [overrideJoinedAs, setOverrideJoinedAs] = useState<RoomRole | null>(null);
+  const [isPersonaModalOpen, setIsPersonaModalOpen] = useState(false);
 
   useEffect(() => {
+    setOverrideHubSlug(null);
+    setOverrideAutoStart(null);
+    setOverrideJoinedAs(null);
+  }, [urlHubId, urlAutoStart, urlJoinedAs]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    let active = true;
     let unlisten: (() => void) | undefined;
 
-    listen<{
-      hubId: string;
-      autoStart?: boolean;
-      joinedAs?: 'owner' | 'guest';
-    }>('request-start-stream', (event) => {
+    listen<StreamLaunchEventPayload>('request-start-stream', (event) => {
+      if (!active) return;
       const targetHub = event.payload.hubId || '';
-      setActiveHubSlug(targetHub);
-      setAutoStart(Boolean(event.payload.autoStart));
-
-      if (event.payload.joinedAs) {
-        setJoinedAs(event.payload.joinedAs);
-      } else if (targetHub && isHubOwner(targetHub, profile)) {
-        setJoinedAs('owner');
-      } else {
-        setJoinedAs('guest');
-      }
-    }).then((fn) => {
-      unlisten = fn;
-    });
+      setOverrideHubSlug(targetHub);
+      setOverrideAutoStart(Boolean(event.payload.autoStart));
+      setOverrideJoinedAs(event.payload.joinedAs ?? null);
+    })
+      .then((fn) => {
+        if (!active) {
+          fn();
+          return;
+        }
+        unlisten = fn;
+      })
+      .catch(() => {});
 
     return () => {
-      if (unlisten) unlisten();
+      active = false;
+      unlisten?.();
     };
-  }, [profile]);
+  }, []);
 
-  const handleCloseStream = async () => {
+  const activeHubSlug = overrideHubSlug ?? urlHubId;
+  const activeAutoStart = overrideAutoStart ?? urlAutoStart;
+  const activeRole: RoomRole | undefined =
+    overrideJoinedAs ??
+    urlJoinedAs ??
+    (activeHubSlug && !isProfileLoading ? (isHubOwner(activeHubSlug, profile) ? 'owner' : 'guest') : undefined);
+
+  const session = useRoomSession({
+    hubId: activeHubSlug,
+    profile,
+    role: activeRole,
+    autoStart: activeAutoStart,
+    isProfileLoading,
+  });
+
+  const handleBackToFriendHubs = async (): Promise<void> => {
     if (isTauri()) {
       await closeStreamWindowTauri();
-    } else {
-      window.close();
+      return;
     }
+    navigate('/');
   };
 
-  const handleOpenProfileWindow = async () => {
+  const handleLeaveRoom = async (): Promise<void> => {
+    await session.leaveRoom();
+  };
+
+  const handleCloseWindow = async (): Promise<void> => {
+    await session.leaveRoom();
+    await handleBackToFriendHubs();
+  };
+
+  const handleCancelKnock = async (): Promise<void> => {
+    session.cancelKnock();
+    await session.leaveRoom();
+    await handleBackToFriendHubs();
+  };
+
+  const handleOpenProfile = async (): Promise<void> => {
     if (isTauri()) {
       await showRegisterWindowTauri();
-    } else {
-      window.open('/#/register', '_blank', 'width=580,height=620');
+      return;
     }
+    setIsPersonaModalOpen(true);
+  };
+
+  const renderMainContent = () => {
+    if (isProfileLoading) {
+      return (
+        <div className={styles.streamViewArea}>
+          <div className={styles.statusBox}>
+            <h3>Loading Watch Room...</h3>
+            <p>Preparing your machine-locked persona and P2P session.</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (!activeHubSlug) {
+      return (
+        <div className={styles.streamViewArea}>
+          <div className={styles.statusBox}>
+            <h3>No Hub Selected</h3>
+            <p>Pick a Friend Hub or enter a hub code to join or host a watch room.</p>
+            <button
+              className={styles.primaryActionBtn}
+              onClick={() => void handleBackToFriendHubs()}
+              type="button"
+            >
+              Back to Friend Hubs
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    if (session.hasLeftRoom) {
+      return (
+        <div className={styles.streamViewArea}>
+          <div className={styles.leftHubCard}>
+            <div className={styles.leftHubMascotWrap}>
+              <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" className={styles.leftHubMascotImg} />
+            </div>
+            <h3>You left {session.hubId}</h3>
+            <p>Your screen share and peer connections have been closed cleanly.</p>
+            <div className={styles.leftHubActions}>
+              <button className={styles.primaryActionBtn} onClick={session.rejoinRoom} type="button">
+                Re-join Hub
+              </button>
+              <button
+                className={styles.secondaryActionBtn}
+                onClick={() => void handleBackToFriendHubs()}
+                type="button"
+              >
+                Friend Hubs
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (session.role === 'guest' && !session.entranceAccepted) {
+      return (
+        <div className={styles.streamViewArea}>
+          <GuestKnockGate
+            hubId={session.hubId}
+            hostName={session.hostInfo.displayName}
+            status={session.knockStatus}
+            errorMessage={session.knockError}
+            onRetry={() => void session.requestEntrance()}
+            onCancel={() => void handleCancelKnock()}
+            onLeave={() => void handleBackToFriendHubs()}
+          />
+        </div>
+      );
+    }
+
+    if (session.isMinimized) {
+      return (
+        <div className={styles.streamViewArea}>
+          <div className={styles.minimizedBar} data-testid="watch-room-minimized-bar">
+            <div className={styles.minimizedBarInfo}>
+              <div className={styles.minimizedTitleRow}>
+                <span className={styles.minimizedLiveDot} />
+                <h3>Watch Room Minimized</h3>
+              </div>
+              <p className={styles.minimizedMeta}>
+                {session.hubId} · {session.streams.length}{' '}
+                {session.streams.length === 1 ? 'stream' : 'streams'} connected · Video rendering
+                paused to save GPU
+              </p>
+            </div>
+
+            <div className={styles.minimizedBarActions}>
+              <button
+                className={styles.primaryActionBtn}
+                data-testid="restore-watch-room-btn"
+                onClick={() => void session.restoreHub()}
+                type="button"
+              >
+                Return to Watch Room
+              </button>
+              <button
+                className={styles.dangerActionBtn}
+                data-testid="leave-minimized-btn"
+                onClick={() => void handleLeaveRoom()}
+                type="button"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <MultiStreamHub
+        hubId={session.hubId}
+        peers={session.peers}
+        streams={session.streams}
+        isSharing={session.isSharing}
+        fps={session.fps}
+        isDeafened={session.isDeafened}
+        layoutMode={session.layoutMode}
+        spotlightStreamId={session.spotlightStreamId}
+        fullscreenStreamId={session.fullscreenStreamId}
+        systemMetrics={session.systemMetrics}
+        highLoadSuggestion={session.highLoadSuggestion}
+        onToggleShare={session.toggleSharing}
+        onSetFps={session.setFps}
+        onToggleFps={session.toggleFps}
+        onSetStreamVolume={session.setStreamVolume}
+        onToggleDeafen={session.toggleDeafen}
+        onToggleLayout={session.toggleLayoutMode}
+        onSelectSpotlightStream={session.selectSpotlightStream}
+        onEnterFullscreen={session.enterFullscreen}
+        onExitFullscreen={session.exitFullscreen}
+        onMinimizeHub={session.minimizeHub}
+        onLeaveHub={handleLeaveRoom}
+        onDismissHighLoadSuggestion={session.dismissHighLoadSuggestion}
+      />
+    );
   };
 
   return (
     <div className={styles.streamContainer}>
       <Header
         profile={profile}
-        activeStreamsCount={1}
-        onCloseStream={handleCloseStream}
-        onOpenProfile={handleOpenProfileWindow}
-        roomTitle={activeHubSlug || 'Elfy Hub'}
+        roomTitle={session.hubId || activeHubSlug}
+        activeStreamsCount={session.streams.length}
+        rttMs={session.systemMetrics.rttMs}
+        isConnected={session.isConnected}
+        onMinimizeHub={!session.hasLeftRoom && !session.isMinimized ? session.minimizeHub : undefined}
+        onCloseStream={handleCloseWindow}
+        onOpenProfile={handleOpenProfile}
       />
-      {joinedAs === 'owner' ? (
-        <StreamerView
-          hubTopic={activeHubSlug}
-          profile={profile}
-          autoStart={autoStart}
+
+      {session.role === 'owner' && session.pendingKnocks.length > 0 && (
+        <HostKnockAlert
+          pendingKnocks={session.pendingKnocks}
+          onAccept={session.acceptKnock}
+          onReject={session.rejectKnock}
         />
-      ) : (
-        <ViewerView
-          hubTopic={activeHubSlug}
-          profile={profile}
-        />
+      )}
+
+      {renderMainContent()}
+
+      {isPersonaModalOpen && (
+        <div
+          className={styles.personaModalBackdrop}
+          onClick={() => setIsPersonaModalOpen(false)}
+        >
+          <div className={styles.personaModalShell} onClick={(e) => e.stopPropagation()}>
+            <ChooseNickname
+              initialProfile={profile}
+              isLoading={isProfileLoading}
+              isRegistered={isRegistered}
+              telemetryConsent={telemetryConsent}
+              onSaveProfile={saveProfile}
+              onChangeTelemetryConsent={setTelemetryConsent}
+              onCompleteRegistration={() => setIsPersonaModalOpen(false)}
+              onCancel={() => setIsPersonaModalOpen(false)}
+            />
+          </div>
+        </div>
       )}
     </div>
   );

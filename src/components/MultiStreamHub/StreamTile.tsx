@@ -1,6 +1,7 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import styles from './StreamTile.module.css';
-import { StreamItem } from '../../types';
+import { StreamItem } from '../../domain/dtos';
+import { ELFY_MASCOT_ICON } from '../../data/mockData';
 import { toggleFullscreenTauri } from '../../utils/tauri';
 
 interface StreamTileProps {
@@ -12,51 +13,80 @@ interface StreamTileProps {
   mediaStream?: MediaStream | null;
 }
 
+const getVolumeIcon = (volume: number): string => {
+  if (volume === 0) return 'volume_off';
+  if (volume < 50) return 'volume_down';
+  return 'volume_up';
+};
+
 export const StreamTile: React.FC<StreamTileProps> = ({
   stream,
   isSpotlight,
   onToggleSpotlight,
   onVolumeChange,
   onToggleFullscreen,
-  mediaStream
+  mediaStream,
 }) => {
-  const tileRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && mediaStream) {
-      videoRef.current.srcObject = mediaStream;
-      videoRef.current.play().catch(() => {});
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (!mediaStream) {
+      videoEl.srcObject = null;
+      return;
     }
+
+    const syncPlayback = (): void => {
+      videoEl.srcObject = mediaStream;
+      videoEl.play().catch(() => {});
+    };
+
+    syncPlayback();
+    mediaStream.addEventListener('addtrack', syncPlayback);
+    mediaStream.addEventListener('removetrack', syncPlayback);
+
+    return () => {
+      mediaStream.removeEventListener('addtrack', syncPlayback);
+      mediaStream.removeEventListener('removetrack', syncPlayback);
+      videoEl.srcObject = null;
+    };
   }, [mediaStream]);
 
-  const handleFullscreenClick = async () => {
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    videoEl.muted = stream.isLocal || stream.volume === 0;
+    videoEl.volume = Math.max(0, Math.min(1, stream.volume / 100));
+  }, [stream.isLocal, stream.volume]);
+
+  const handleFullscreenClick = async (): Promise<void> => {
     if (onToggleFullscreen) {
       onToggleFullscreen();
-    } else {
-      if (!isSpotlight) {
-        onToggleSpotlight();
-      }
-      await toggleFullscreenTauri();
+      return;
     }
+    if (!isSpotlight) {
+      onToggleSpotlight();
+    }
+    await toggleFullscreenTauri();
   };
+
+  const avatarSrc = stream.avatarUrl || ELFY_MASCOT_ICON;
 
   return (
     <div
-      ref={tileRef}
       className={`${styles.tile} ${isSpotlight ? styles.spotlighted : ''}`}
+      data-testid="stream-tile"
+      onDoubleClick={() => void handleFullscreenClick()}
     >
-      {/* Video Content */}
-      <div
-        className={styles.videoArea}
-        style={!mediaStream && stream.previewImage ? { backgroundImage: `url(${stream.previewImage})` } : undefined}
-      >
+      <div className={styles.videoArea}>
         {mediaStream ? (
           <video
             ref={videoRef}
             autoPlay
             playsInline
-            muted={stream.isLocal}
+            muted={stream.isLocal || stream.volume === 0}
             disablePictureInPicture
             className={styles.realVideo}
           />
@@ -64,8 +94,7 @@ export const StreamTile: React.FC<StreamTileProps> = ({
           <div className={styles.videoGradientOverlay} />
         )}
 
-        {/* Top Overlay: Live badge, Spotlight & Fullscreen */}
-        <div className={styles.topOverlay}>
+        <div className={styles.topOverlay} onDoubleClick={(e) => e.stopPropagation()}>
           <div className={styles.livePill}>
             <span className={styles.liveDot} />
             <span className={styles.liveText}>LIVE</span>
@@ -89,7 +118,8 @@ export const StreamTile: React.FC<StreamTileProps> = ({
 
             <button
               className={styles.actionBtn}
-              onClick={handleFullscreenClick}
+              data-testid="enter-fullscreen-btn"
+              onClick={() => void handleFullscreenClick()}
               title="Fullscreen"
               type="button"
             >
@@ -100,32 +130,36 @@ export const StreamTile: React.FC<StreamTileProps> = ({
           </div>
         </div>
 
-        {/* Bottom Overlay: Streamer info & Volume */}
-        <div className={styles.bottomOverlay}>
+        <div className={styles.bottomOverlay} onDoubleClick={(e) => e.stopPropagation()}>
           <div className={styles.streamerTag}>
             <div className={styles.streamerAvatarWrap}>
-              <img src={stream.avatarUrl} alt={stream.name} className={styles.streamerAvatar} />
+              <img src={avatarSrc} alt={stream.name} className={styles.streamerAvatar} />
               <span className={styles.avatarDot} />
             </div>
             <span className={styles.streamerName}>{stream.name}</span>
             <span className={styles.categoryPill}>{stream.tag}</span>
           </div>
 
-          <div className={styles.volumeWrap}>
-            <span className={`material-symbols-outlined ${styles.volumeIcon}`}>
-              {stream.volume === 0 ? 'volume_off' : stream.volume < 50 ? 'volume_down' : 'volume_up'}
-            </span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={stream.volume}
-              onChange={(e) => onVolumeChange(Number(e.target.value))}
-              className={styles.volumeSlider}
-            />
-          </div>
+          {!stream.isLocal && (
+            <div className={styles.volumeWrap}>
+              <span className={`material-symbols-outlined ${styles.volumeIcon}`}>
+                {getVolumeIcon(stream.volume)}
+              </span>
+              <input
+                aria-label={`Volume for ${stream.name}`}
+                type="range"
+                min="0"
+                max="100"
+                value={stream.volume}
+                onChange={(e) => onVolumeChange(Number(e.target.value))}
+                className={styles.volumeSlider}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
+
+export default StreamTile;

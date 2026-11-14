@@ -1,68 +1,111 @@
 import React, { useState } from 'react';
 import styles from './FriendHubs.module.css';
-import { FriendHub, UserProfile } from '../../types';
+import { ActiveMinimizedHubDto, FriendHubViewModel, HubLiveState, UserProfile } from '../../domain/dtos';
+import { sanitizeHubCode } from '../../domain/validators';
+import { formatFullPeerTag } from '../../utils/hubTopics';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
-import { hideMainWindowTauri, startDraggingTauri } from '../../utils/tauri';
+import { hideMainWindowTauri, isTauri, startDraggingTauri } from '../../utils/tauri';
 
 interface FriendHubsProps {
   profile: UserProfile;
-  hubs: FriendHub[];
-  isSharing: boolean;
-  onOpenHub: (hubId: string, autoStart: boolean) => void;
-  onOpenProfile: () => void;
-  onStopShare: () => void;
+  isProfileLoading: boolean;
+  hubs: FriendHubViewModel[];
+  isProbing: boolean;
+  minimizedHub: ActiveMinimizedHubDto | null;
+  onOpenHub: (hubId: string, autoStart?: boolean) => void | Promise<void>;
+  onOpenProfile: () => void | Promise<void>;
+  onRefreshHubs: () => void | Promise<void>;
+  onRemoveHub: (hubId: string) => void | Promise<void>;
+  onRestoreMinimizedHub: () => void | Promise<void>;
+  onDisconnectMinimizedHub: () => void | Promise<void>;
 }
+
+interface HubStatusDisplay {
+  label: string;
+  actionLabel: string;
+  badgeClass: string;
+  dotClass: string;
+}
+
+const HUB_STATUS_META: Record<HubLiveState, HubStatusDisplay> = {
+  broadcasting: {
+    label: 'Broadcasting',
+    actionLabel: 'Watch',
+    badgeClass: styles.statusBroadcasting,
+    dotClass: styles.hubDotBroadcasting,
+  },
+  online: {
+    label: 'Online',
+    actionLabel: 'Join',
+    badgeClass: styles.statusOnline,
+    dotClass: styles.hubDotOnline,
+  },
+  offline: {
+    label: 'Offline',
+    actionLabel: 'Open',
+    badgeClass: styles.statusOffline,
+    dotClass: styles.hubDotOffline,
+  },
+};
+
+const formatStreamersSummary = (hub: FriendHubViewModel): string => {
+  if (hub.streamerNames.length > 0) {
+    return `Streaming: ${hub.streamerNames.join(', ')}`;
+  }
+  if (hub.status === 'online') {
+    return 'Room open · Ready to watch or share';
+  }
+  return `${hub.ownerNickname}${hub.ownerTag} · Knock when host is online`;
+};
 
 export const FriendHubs: React.FC<FriendHubsProps> = ({
   profile,
-  isSharing,
+  isProfileLoading,
+  hubs,
+  isProbing,
+  minimizedHub,
   onOpenHub,
   onOpenProfile,
-  onStopShare
+  onRefreshHubs,
+  onRemoveHub,
+  onRestoreMinimizedHub,
+  onDisconnectMinimizedHub,
 }) => {
-  const [hubs, setHubs] = useState<FriendHub[]>([]);
   const [copied, setCopied] = useState(false);
   const [joinCode, setJoinCode] = useState('');
-  const myHub = `elfy/hub/${profile.nickname}${profile.peerTag}`;
+  const [joinError, setJoinError] = useState<string | null>(null);
 
-  const handleCopyLink = () => {
+  const fullTag = formatFullPeerTag(profile.nickname, profile.peerTag);
+  const myHub = `elfy/hub/${fullTag}`;
+  const preferredFps = profile.preferredFps ?? 60;
+  const activeHubsCount = hubs.filter((item) => item.status !== 'offline').length;
+
+  const handleCopyLink = (): void => {
+    if (isProfileLoading) return;
     navigator.clipboard?.writeText(myHub).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    window.setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleStopBroadcast = () => {
-    if (window.confirm('Stop broadcasting screen to all active hubs?')) {
-      onStopShare();
-    }
-  };
-
-  const handleJoinByCode = (e: React.FormEvent) => {
+  const handleJoinByCode = (e: React.FormEvent): void => {
     e.preventDefault();
-    
-    if (!joinCode.trim()) return;
+    const sanitized = sanitizeHubCode(joinCode);
+    if (!sanitized) {
+      setJoinError('Enter a valid hub code like elfy/hub/Name#tag');
+      return;
+    }
 
-
-    const newHub: FriendHub = {
-      id: joinCode.trim(),
-      name: joinCode.trim(),
-      status: 'idle',
-      description: '',
-      previewImage: 'https://lh3.googleusercontent.com/aida-public/AB6AXuB4ADxW8ZnRZzNLCb1Y8iSB01mH-LJbcbQQw_sMRjD-q3nimRXiRmnNqdePhnrO_Hb9RNZXKD3DCVoQ4VRD3HDoEIrARON2pAPJu8Z5rQjW3lHApg0jWzNXMn0DEfheG_JTfFm4SuAexfX_BwVCy-OxRGjrq4M5WPmXi3N4zXtVCqFnZsWENgtAX7B5gyiTw-IbaAz9QAAMJUKPf5t5DMkm5vZ-jjWs3JGfw8yj5TMl18i0UtRCBv2HVw',
-      peers: 1,
-      latency: 19,
-      audioFormat: 'Stereo 48kHz'
-    };
-
-    setHubs((prev) => [newHub, ...prev]);
+    setJoinError(null);
     setJoinCode('');
+    void onOpenHub(sanitized, false);
   };
 
-  const handleHideWindow = async () => {
+  const handleHideWindow = async (): Promise<void> => {
+    if (!isTauri()) return;
     await hideMainWindowTauri();
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest('button, input, select, textarea, a, [role="button"], [data-no-drag]')) {
@@ -71,14 +114,97 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
     startDraggingTauri();
   };
 
+  const renderHubCard = (hub: FriendHubViewModel) => {
+    const statusMeta = HUB_STATUS_META[hub.status];
+    const isLive = hub.status === 'broadcasting';
+    const avatarSrc = hub.ownerAvatar || ELFY_MASCOT_ICON;
+
+    return (
+      <div
+        key={hub.hubId}
+        className={`${styles.hubCard} ${isLive ? styles.hubCardActive : ''}`}
+        data-testid="friend-hub-card"
+        onClick={() => void onOpenHub(hub.hubId, false)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            void onOpenHub(hub.hubId, false);
+          }
+        }}
+        title={`Open ${hub.ownerNickname}${hub.ownerTag}`}
+      >
+        <div className={styles.hubTopRow}>
+          <div className={styles.hubInfoLeft}>
+            <div className={styles.hubThumbWrap}>
+              <img src={avatarSrc} alt={hub.ownerNickname} className={styles.hubThumb} />
+              <span className={`${styles.hubOnlineDot} ${statusMeta.dotClass}`} />
+            </div>
+
+            <div className={styles.hubDetails}>
+              <div className={styles.hubNameRow}>
+                <span className={styles.hubName}>
+                  {hub.ownerNickname}
+                  <span className={styles.hubOwnerTag}>{hub.ownerTag}</span>
+                </span>
+                <span className={`${styles.statusBadge} ${statusMeta.badgeClass}`}>
+                  {statusMeta.label}
+                </span>
+              </div>
+              <p className={styles.hubDesc}>{formatStreamersSummary(hub)}</p>
+            </div>
+          </div>
+
+          <div className={styles.hubActions}>
+            <button
+              className={isLive ? styles.connectedBtn : styles.castBtn}
+              onClick={(e) => {
+                e.stopPropagation();
+                void onOpenHub(hub.hubId, false);
+              }}
+              type="button"
+            >
+              <span>{statusMeta.actionLabel}</span>
+            </button>
+
+            <button
+              aria-label={`Remove ${hub.ownerNickname}`}
+              className={styles.removeHubBtn}
+              onClick={(e) => {
+                e.stopPropagation();
+                void onRemoveHub(hub.hubId);
+              }}
+              title="Remove Friend Hub"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+                close
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.hubSubBar}>
+          <span className={styles.peerCountTag} data-testid="hub-peer-count">
+            <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>
+              group
+            </span>
+            <span>{hub.peers} {hub.peers === 1 ? 'peer' : 'peers'}</span>
+          </span>
+          <span className={styles.latencyTag}>
+            <span className={styles.latencyDot} />
+            <span>{hub.status !== 'offline' && hub.latencyMs > 0 ? `${hub.latencyMs}ms` : 'Standby'}</span>
+          </span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.container}>
-        {/* Companion Header (NO tab selector, NO mock mac dots) */}
-        <header
-          className={styles.header}
-          onMouseDown={handleMouseDown}
-        >
+        <header className={styles.header} onMouseDown={handleMouseDown}>
           <div className={styles.headerLeft}>
             <div className={styles.mascotLogo}>
               <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" />
@@ -87,254 +213,254 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
           </div>
 
           <div className={styles.headerRight}>
-            <div
-              className={styles.profileAvatar}
-              onClick={onOpenProfile}
-              role="button"
-              tabIndex={0}
-              data-no-drag="true"
-              title={`Edit Persona (${profile.nickname}${profile.peerTag})`}
-            >
-              <img src={profile.avatarUrl} alt={profile.nickname} />
-            </div>
-
             <button
-              className={styles.trayCloseBtn}
-              onClick={handleHideWindow}
-              title="Hide to system tray"
+              aria-label={`Edit Persona (${fullTag})`}
+              className={styles.profileAvatarBtn}
+              data-no-drag="true"
+              onClick={() => void onOpenProfile()}
+              title={`Edit Persona (${fullTag})`}
               type="button"
             >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                close
-              </span>
+              <img src={profile.avatarUrl} alt={profile.nickname} />
             </button>
+
+            {isTauri() && (
+              <button
+                className={styles.trayCloseBtn}
+                onClick={() => void handleHideWindow()}
+                title="Hide to system tray"
+                type="button"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                  close
+                </span>
+              </button>
+            )}
           </div>
         </header>
 
-        {/* Main Content Area */}
         <main className={styles.contentArea}>
-          {/* Active Broadcasting Bento Card */}
-          <div className={styles.broadcastingCard}>
-            <div className={styles.ambientAura} />
-
-            <div className={styles.heroTopRow}>
-              <div className={styles.heroBadgeWrap}>
-                <div className={styles.broadcastingPill}>
-                  <div className={styles.pingWrap}>
-                    <span className={styles.pingDotAnimate} />
-                    <span className={styles.pingDotSolid} />
+          <div className={styles.contentInner}>
+            {minimizedHub && (
+              <section className={styles.minimizedBanner} data-testid="minimized-hub-banner">
+                <div className={styles.minimizedInfo}>
+                  <div className={styles.minimizedTitleRow}>
+                    <span className={styles.minimizedPulseDot} />
+                    <span className={styles.minimizedTitle}>Active Hub Connected</span>
                   </div>
-                  <span className={styles.broadcastingLabel}>
-                    {!isSharing ? 'Idle' : 'Live'}
+                  <span className={styles.minimizedMeta}>
+                    {minimizedHub.hubId} · {minimizedHub.activeStreamsCount} streams ·{' '}
+                    {minimizedHub.isSharing ? 'Sharing' : 'Watching'}
                   </span>
                 </div>
-                <span className={styles.peerTag}>{profile.nickname}{profile.peerTag}</span>
-              </div>
 
-              <div className={styles.heroControls}>
+                <div className={styles.minimizedActions}>
+                  <button
+                    className={styles.restoreBannerBtn}
+                    data-testid="restore-hub-btn"
+                    onClick={() => void onRestoreMinimizedHub()}
+                    type="button"
+                  >
+                    Return to Room
+                  </button>
+                  <button
+                    className={styles.disconnectBannerBtn}
+                    data-testid="leave-minimized-hub-btn"
+                    onClick={() => void onDisconnectMinimizedHub()}
+                    type="button"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </section>
+            )}
+
+            <section className={styles.broadcastingCard}>
+              <div className={styles.ambientAura} />
+
+              <div className={styles.heroTopRow}>
+                <div className={styles.heroBadgeWrap}>
+                  <div className={styles.broadcastingPill}>
+                    <div className={styles.pingWrap}>
+                      <span className={styles.pingDotAnimate} />
+                      <span className={styles.pingDotSolid} />
+                    </div>
+                    <span className={styles.broadcastingLabel}>My Hub</span>
+                  </div>
+                  <span className={styles.peerTag}>
+                    {isProfileLoading ? 'Loading...' : fullTag}
+                  </span>
+                </div>
+
                 <button
-                  className={styles.heroBtnStop}
-                  onClick={!isSharing ? () => onOpenHub(myHub, true) : handleStopBroadcast}
+                  className={styles.openHubBtn}
+                  data-testid="open-my-hub-btn"
+                  disabled={isProfileLoading}
+                  onClick={() => void onOpenHub(myHub, false)}
                   type="button"
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
-                    {!isSharing ? "play_circle" : "stop_circle"}
+                  <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+                    meeting_room
                   </span>
-                  <span>{!isSharing ? "Start" : "Stop"}</span>
+                  <span>Open Room</span>
                 </button>
               </div>
-            </div>
 
-            {/* Center Data: Feed Specs & Equalizer */}
-            <div className={styles.feedSpecsWrap}>
-              <div className={styles.feedSpecsLeft}>
-                <div className={styles.specIconBox}>
-                  <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                    screen_share
+              <div className={styles.feedSpecsWrap}>
+                <div className={styles.feedSpecsLeft}>
+                  <div className={styles.specIconBox}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                      screen_share
+                    </span>
+                  </div>
+                  <div className={styles.specDetails}>
+                    <span className={styles.specTitle}>Permanent Watch Room</span>
+                    <div className={styles.specSub}>
+                      <span className={styles.specRose}>1080p · {preferredFps}fps</span>
+                      <span>·</span>
+                      <span>Bidirectional P2P</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.shareLinkBar}>
+                <div className={styles.shareLinkText}>
+                  <span className="material-symbols-outlined" style={{ fontSize: '14px', color: 'var(--primary)', flexShrink: 0 }}>
+                    link
                   </span>
-                </div>
-                <div className={styles.specDetails}>
-                  <span className={styles.specTitle}>Main Display + Audio</span>
-                  <div className={styles.specSub}>
-                    <span className={styles.specRose}>1080p · 60fps</span>
-                    <span>·</span>
-                    <span>Opus 128k</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className={styles.meterWrap}>
-                <div className={styles.equalizerBars}>
-                  <span className={`${styles.bar} ${styles.bar1}`} />
-                  <span className={`${styles.bar} ${styles.bar2}`} />
-                  <span className={`${styles.bar} ${styles.bar3}`} />
-                  <span className={`${styles.bar} ${styles.bar4}`} />
-                  <span className={`${styles.bar} ${styles.bar5}`} />
-                </div>
-                <span className={styles.bitrateText}>5,840 kbps</span>
-              </div>
-            </div>
-
-            {/* Quick Share Link Pill */}
-            <div className={styles.shareLinkBar}>
-              <div className={styles.shareLinkText}>
-                <span className="material-symbols-outlined" style={{ fontSize: '14px', color: 'var(--primary)' }}>
-                  link
-                </span>
-                <span>elfy/hub/{profile.nickname}{profile.peerTag}</span>
-              </div>
-
-              <button className={styles.copyPillBtn} onClick={handleCopyLink} type="button">
-                <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>
-                  content_copy
-                </span>
-                <span>{copied ? 'Copied' : 'Copy'}</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Join Another Hub by Code */}
-          <form className={styles.joinCodeBox} onSubmit={handleJoinByCode}>
-            <div className={styles.joinCodeHeader}>
-              <span className={styles.joinCodeTitle}>
-                <span className="material-symbols-outlined" style={{ fontSize: '15px', color: 'var(--primary)' }}>
-                  add_circle
-                </span>
-                <span>Join Hub by Code</span>
-              </span>
-              <span className={styles.noSignupText}>No Signup</span>
-            </div>
-
-            <div className={styles.joinInputRow}>
-              <div className={styles.joinInputWrap}>
-                <span className={`material-symbols-outlined ${styles.joinTagIcon}`} style={{ fontSize: '14px' }}>
-                  tag
-                </span>
-                <input
-                  className={styles.joinInput}
-                  type="text"
-                  placeholder="e.g. elfy/hub/Beako#rByRBY"
-                  value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value)}
-                />
-              </div>
-
-              <button className={styles.joinSubmitBtn} type="submit">
-                Join
-              </button>
-            </div>
-          </form>
-
-          {/* Friend Hubs List - Always opens a standalone resizable stream viewer window */}
-          <div className={styles.hubsSection}>
-            <div className={styles.hubsHeader}>
-              <div className={styles.hubsTitleWrap}>
-                <span className={styles.hubsTitle}>Your Friend Hubs</span>
-                <span className={styles.hubsCountBadge}>{hubs.length} Active</span>
-              </div>
-              <span className={styles.p2pLabel}>P2P Mesh</span>
-            </div>
-
-            {hubs.map((hub) => (
-              <div
-                key={hub.id}
-                className={`${styles.hubCard} ${hub.status === 'broadcasting' ? styles.hubCardActive : ''}`}
-                onClick={() => onOpenHub(hub.id, false)}
-                title={`Click to open ${hub.name} in standalone screen-sharing window`}
-              >
-                <div className={styles.hubTopRow}>
-                  <div className={styles.hubInfoLeft}>
-                    <div className={styles.hubThumbWrap}>
-                      <img src={hub.previewImage} alt={hub.name} className={styles.hubThumb} />
-                      <span
-                        className={`${styles.hubOnlineDot} ${hub.status !== 'broadcasting' ? styles.hubOnlineDotCyan : ''}`}
-                      />
-                    </div>
-
-                    <div className={styles.hubDetails}>
-                      <div className={styles.hubNameRow}>
-                        <span className={styles.hubName}>{hub.name}</span>
-                        {hub.status === 'broadcasting' && (
-                          <span className={styles.broadcastingSmallPill}>Live</span>
-                        )}
-                      </div>
-                      <p className={styles.hubDesc}>{hub.description}</p>
-                    </div>
-                  </div>
-
-                  <div className={styles.hubActions}>
-                    {hub.status === 'broadcasting' ? (
-                      <button
-                        className={styles.connectedBtn}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenHub(hub.id, false);
-                        }}
-                        type="button"
-                      >
-                        Watch
-                      </button>
-                    ) : (
-                      <button
-                        className={styles.castBtn}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onOpenHub(hub.id, false);
-                        }}
-                        type="button"
-                      >
-                        <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
-                          cast
-                        </span>
-                        <span>Open</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {hub.status === 'broadcasting' && (
-                  <div className={styles.hubSubBar}>
-                    <span className={styles.spatialStereoTag}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>
-                        graphic_eq
-                      </span>
-                      <span>Spatial Stereo · {hub.peers} peers</span>
+                  {isProfileLoading ? (
+                    <span>Loading hub code...</span>
+                  ) : (
+                    <span className={styles.shareLinkCode} data-testid="my-hub-code">
+                      {myHub}
                     </span>
-                    <span className={styles.latencyTag}>
-                      <span className={styles.latencyDot} />
-                      <span>{hub.latency}ms</span>
+                  )}
+                </div>
+
+                <button
+                  className={styles.copyPillBtn}
+                  disabled={isProfileLoading}
+                  onClick={handleCopyLink}
+                  type="button"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>
+                    content_copy
+                  </span>
+                  <span>{copied ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+            </section>
+
+            <form className={styles.joinCodeBox} onSubmit={handleJoinByCode}>
+              <div className={styles.joinCodeHeader}>
+                <span className={styles.joinCodeTitle}>
+                  <span className="material-symbols-outlined" style={{ fontSize: '15px', color: 'var(--primary)' }}>
+                    add_circle
+                  </span>
+                  <span>Join Hub by Code</span>
+                </span>
+                <span className={styles.noSignupText}>Knock Gate P2P</span>
+              </div>
+
+              <div className={styles.joinInputRow}>
+                <div className={styles.joinInputWrap}>
+                  <span className={`material-symbols-outlined ${styles.joinTagIcon}`} style={{ fontSize: '14px' }}>
+                    tag
+                  </span>
+                  <input
+                    className={styles.joinInput}
+                    data-testid="join-hub-input"
+                    type="text"
+                    placeholder="e.g. elfy/hub/Nova#123456"
+                    value={joinCode}
+                    onChange={(e) => {
+                      setJoinError(null);
+                      setJoinCode(e.target.value);
+                    }}
+                  />
+                </div>
+
+                <button className={styles.joinSubmitBtn} data-testid="join-hub-submit" type="submit">
+                  Join
+                </button>
+              </div>
+
+              {joinError && <span className={styles.joinErrorText}>{joinError}</span>}
+            </form>
+
+            <section className={styles.hubsSection}>
+              <div className={styles.hubsHeader}>
+                <div className={styles.hubsTitleWrap}>
+                  <span className={styles.hubsTitle}>Saved Friend Hubs</span>
+                  <span className={styles.hubsCountBadge}>{activeHubsCount} Live</span>
+                </div>
+
+                <button
+                  className={styles.refreshBtn}
+                  data-testid="refresh-hubs-btn"
+                  disabled={isProbing}
+                  onClick={() => void onRefreshHubs()}
+                  title="Probe saved friend hubs"
+                  type="button"
+                >
+                  <span
+                    className={`material-symbols-outlined ${isProbing ? styles.spinIcon : ''}`}
+                    style={{ fontSize: '14px' }}
+                  >
+                    refresh
+                  </span>
+                  <span>{isProbing ? 'Probing...' : 'Refresh'}</span>
+                </button>
+              </div>
+
+              <div className={styles.hubsList} data-testid="friend-hubs-list">
+                {hubs.length === 0 ? (
+                  <div className={styles.emptyHubsCard}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '22px', color: 'var(--on-surface-muted)' }}>
+                      groups
                     </span>
+                    <p>Join a friend&apos;s hub code above to save it automatically to SQLite.</p>
                   </div>
+                ) : (
+                  hubs.map(renderHubCard)
                 )}
               </div>
-            ))}
+            </section>
           </div>
         </main>
 
-        {/* Companion Footer */}
         <footer className={styles.footer}>
           <div className={styles.footerLeft}>
-            <span>v2.4.1 Companion</span>
+            <span>P2P Mesh Ready</span>
             <span className={styles.footerLatency}>
-              <span className="material-symbols-outlined" style={{ fontSize: '11px' }}>
-                wifi_tethering
+              <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>
+                speed
               </span>
-              <span>18ms</span>
+              <span>{preferredFps} FPS</span>
             </span>
           </div>
 
           <div className={styles.footerRight}>
-            <button className={styles.footerBtn} onClick={onOpenProfile} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>badge</span>
-              <span>Profile</span>
+            <button className={styles.footerBtn} onClick={() => void onOpenProfile()} type="button">
+              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
+                badge
+              </span>
+              <span>Persona</span>
             </button>
-            <button className={styles.footerBtn} onClick={handleHideWindow} type="button">
-              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>visibility_off</span>
-              <span>Hide</span>
-            </button>
+            {isTauri() && (
+              <button className={styles.footerBtn} onClick={() => void handleHideWindow()} type="button">
+                <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
+                  visibility_off
+                </span>
+                <span>Hide</span>
+              </button>
+            )}
           </div>
         </footer>
       </div>
     </div>
   );
 };
+
+export default FriendHubs;

@@ -1,173 +1,186 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import styles from './ChooseNickname.module.css';
-import { AvatarOption, UserProfile } from '../../types';
-import { AVATAR_OPTIONS, CUTE_ALIASES, DEFAULT_USER_PROFILE, ELFY_HAPPY, ELFY_MASCOT_ICON } from '../../data/mockData';
-import { closeRegisterWindowTauri, startDraggingTauri } from '../../utils/tauri';
-import ShortUniqueId from 'short-unique-id';
-import { db, IUsers } from '../../database';
-import { commands } from "@skipperndt/plugin-machine-uid";
+import { AvatarOption, TelemetryConsentState, UserProfile } from '../../domain/dtos';
+import { SaveProfileInput } from '../../hooks/useProfile';
+import {
+  AVATAR_OPTIONS,
+  CUTE_ALIASES,
+  DEFAULT_USER_PROFILE,
+  ELFY_HAPPY,
+  ELFY_MASCOT_ICON,
+} from '../../data/mockData';
+import { closeRegisterWindowTauri, isTauri, startDraggingTauri } from '../../utils/tauri';
 
 interface ChooseNicknameProps {
   initialProfile: UserProfile;
-  onCompleteRegistration?: (profile: UserProfile) => void;
+  isLoading?: boolean;
+  isRegistered?: boolean;
+  telemetryConsent: TelemetryConsentState;
+  onSaveProfile: (input: SaveProfileInput) => Promise<UserProfile>;
+  onChangeTelemetryConsent: (consent: TelemetryConsentState) => Promise<UserProfile>;
+  onCompleteRegistration?: (profile: UserProfile) => void | Promise<void>;
   onCancel?: () => void;
 }
 
-const tagGenerator = new ShortUniqueId({ length: 6 });
+const findAvatarByUrl = (avatarUrl: string): AvatarOption => {
+  const match = AVATAR_OPTIONS.find((item) => item.url === avatarUrl);
+  if (match) return match;
+  return {
+    id: 'default',
+    label: 'default',
+    name: DEFAULT_USER_PROFILE.avatarName,
+    url: avatarUrl || DEFAULT_USER_PROFILE.avatarUrl,
+  };
+};
+
+const stripTagPrefix = (peerTag: string): string => {
+  return peerTag.replace(/^#/, '').trim();
+};
+
+const getSubmitLabel = (
+  isSubmitting: boolean,
+  isSuccess: boolean,
+  isExistingUser: boolean
+): { icon: string; text: string; spinning: boolean } => {
+  if (isSubmitting) return { icon: 'sync', text: 'Saving Persona...', spinning: true };
+  if (isSuccess) return { icon: 'check_circle', text: 'Saved!', spinning: false };
+  if (isExistingUser) return { icon: 'check', text: 'Save Changes', spinning: false };
+  return { icon: 'arrow_forward', text: 'Get Started', spinning: false };
+};
 
 export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
   initialProfile,
+  isLoading = false,
+  isRegistered = false,
+  telemetryConsent,
+  onSaveProfile,
+  onChangeTelemetryConsent,
   onCompleteRegistration,
-  onCancel
+  onCancel,
 }) => {
   const [nickname, setNickname] = useState(initialProfile.nickname);
-  const [peerTag, setPeerTag] = useState(() => {
-    return initialProfile.peerTag ? initialProfile.peerTag.replace('#', '') : tagGenerator.rnd();
-  });
-  const [selectedAvatar, setSelectedAvatar] = useState<AvatarOption>(() => {
-    const found = AVATAR_OPTIONS.find((a) => a.url === initialProfile.avatarUrl);
-    return found || AVATAR_OPTIONS[0];
-  });
-  const [isExistingUser, setIsExistingUser] = useState(false);
+  const [selectedAvatar, setSelectedAvatar] = useState<AvatarOption>(() =>
+    findAvatarByUrl(initialProfile.avatarUrl)
+  );
   const [isSpinning, setIsSpinning] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUpdatingTelemetry, setIsUpdatingTelemetry] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const hasEditedRef = useRef(false);
 
-  const currentAvatarUrl = selectedAvatar.url;
+  const lockedTag = stripTagPrefix(initialProfile.peerTag);
+  const isExistingUser = isRegistered || Boolean(initialProfile.machineHash);
+  const telemetryEnabled = telemetryConsent === 'granted';
 
   useEffect(() => {
-    fetchCurrentUserData();
-  }, []);
+    if (isLoading || hasEditedRef.current) return;
+    setNickname(initialProfile.nickname);
+    setSelectedAvatar(findAvatarByUrl(initialProfile.avatarUrl));
+  }, [initialProfile.avatarUrl, initialProfile.machineHash, initialProfile.nickname, isLoading]);
 
-  const fetchCurrentUserData = async () => {
-    try {
-      const machine = await commands.getMachineUid();
-      
-      if (machine.status === 'error' || !machine.data.id) {
-        console.error(machine);
-        return;
-      }
-
-      const currentData = await db.table<IUsers>("users").get(machine.data.id);
-      
-      if (!currentData) {
-        setIsExistingUser(false);
-        return;
-      }
-
-      // User already exists in database: lock peer tag, populate name & avatar
-      setIsExistingUser(true);
-      setNickname(currentData.name);
-      setPeerTag(currentData.id);
-      if (currentData.avatar) {
-        const found = AVATAR_OPTIONS.find((a) => a.url === currentData.avatar);
-        if (found) {
-          setSelectedAvatar(found);
-        }
-      }
-    } catch (err) {
-      console.error('Error querying existing user in database:', err);
-    }
+  const handleNicknameChange = (value: string): void => {
+    hasEditedRef.current = true;
+    setIsSuccess(false);
+    setErrorMessage(null);
+    setNickname(value);
   };
 
-  const handleRollDice = () => {
+  const handleRollDice = (): void => {
+    hasEditedRef.current = true;
+    setIsSuccess(false);
     setIsSpinning(true);
-    setTimeout(() => setIsSpinning(false), 300);
+    window.setTimeout(() => setIsSpinning(false), 300);
 
     const randomName = CUTE_ALIASES[Math.floor(Math.random() * CUTE_ALIASES.length)];
     setNickname(randomName);
-
-    // If user already exists in DB, we cannot change its peer tag, only name & avatar
-    if (!isExistingUser) {
-      const randomTag = tagGenerator.rnd();
-      setPeerTag(randomTag);
-    }
   };
 
-  const handleSelectAvatarOption = (opt: AvatarOption) => {
+  const handleSelectAvatarOption = (opt: AvatarOption): void => {
+    hasEditedRef.current = true;
+    setIsSuccess(false);
     setSelectedAvatar(opt);
   };
 
-  const handleResetAvatar = () => {
+  const handleResetAvatar = (): void => {
+    hasEditedRef.current = true;
+    setIsSuccess(false);
     setSelectedAvatar({
       id: 'default',
       label: 'default',
-      name: 'default',
-      url: DEFAULT_USER_PROFILE.avatarUrl
+      name: DEFAULT_USER_PROFILE.avatarName,
+      url: DEFAULT_USER_PROFILE.avatarUrl,
     });
   };
 
-  const handleCopyId = () => {
-    const fullId = `${nickname.trim() || 'Companion'}#${peerTag}`;
+  const handleCopyId = (): void => {
+    const fullId = `${nickname.trim() || 'Companion'}#${lockedTag}`;
     navigator.clipboard?.writeText(fullId).catch(() => {});
   };
 
-  const handleClose = async () => {
+  const handleClose = async (): Promise<void> => {
     if (onCancel) {
       onCancel();
-    } else {
+      return;
+    }
+    if (isTauri()) {
       await closeRegisterWindowTauri();
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-
-    const machine = await commands.getMachineUid();
-    if (machine.status === 'error' || !machine.data.id) {
-      setIsSubmitting(false);
-      setIsSuccess(false);
-      throw new Error("Could not fetch Machine ID");
-    }
-    
+  const handleToggleTelemetry = async (): Promise<void> => {
+    if (isUpdatingTelemetry) return;
+    setIsUpdatingTelemetry(true);
+    setErrorMessage(null);
+    const nextConsent: TelemetryConsentState = telemetryEnabled ? 'denied' : 'granted';
     try {
-      // Re-verify against DB to guarantee peer tag immutability for existing users
-      const currentData = await db.table<IUsers>("users").get(machine.data.id);
-      const finalPeerTag = currentData ? currentData.id : peerTag;
+      await onChangeTelemetryConsent(nextConsent);
+    } catch {
+      setErrorMessage('Could not update telemetry preference.');
+    } finally {
+      setIsUpdatingTelemetry(false);
+    }
+  };
 
-      const user: IUsers = {
-        machine: machine.data.id,
-        id: finalPeerTag,
-        name: nickname.trim() || 'Companion',
-        avatar: currentAvatarUrl
-      };
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    if (isSubmitting || isLoading) return;
 
-      await db.table<IUsers>('users').put(user);
-      setIsSuccess(true);
-      setIsExistingUser(true);
-      
-      onCompleteRegistration?.({
-        nickname: user.name,
-        peerTag: user.id.startsWith('#') ? user.id : `#${user.id}`,
-        avatarUrl: user.avatar,
-        avatarName: selectedAvatar.name
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const saved = await onSaveProfile({
+        nickname: nickname.trim() || 'Companion',
+        avatarUrl: selectedAvatar.url,
+        avatarName: selectedAvatar.name,
       });
-    } catch (err: unknown) {
+      hasEditedRef.current = false;
+      setIsSuccess(true);
+      await onCompleteRegistration?.(saved);
+    } catch {
       setIsSuccess(false);
-      console.error(err);
+      setErrorMessage('Failed to save persona to local SQLite database.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement | null;
-    if (target?.closest('button, input, select, textarea, a, [role="button"], [data-no-drag]')) {
+    if (target?.closest('button, input, select, textarea, a, [role="button"], [role="switch"], [data-no-drag]')) {
       return;
     }
     startDraggingTauri();
   };
 
+  const submitState = getSubmitLabel(isSubmitting, isSuccess, isExistingUser);
+  const displayNickname = nickname.trim() || 'Companion';
+
   return (
     <div className={styles.wrapper}>
       <div className={styles.windowFrame}>
-        {/* Title Bar with Drag Region */}
-        <div
-          className={styles.titleBar}
-          onMouseDown={handleMouseDown}
-        >
+        <div className={styles.titleBar} onMouseDown={handleMouseDown}>
           <div className={styles.titleCenter}>
             <div className={styles.titleMascot}>
               <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" />
@@ -175,10 +188,10 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
             <span className={`material-symbols-outlined ${styles.boltIcon}`}>bolt</span>
             <span>Elfy • {isExistingUser ? 'Edit Persona' : 'Setup'}</span>
           </div>
-        
+
           <button
             className={styles.closeSetupBtn}
-            onClick={handleClose}
+            onClick={() => void handleClose()}
             title="Close Setup"
             type="button"
           >
@@ -188,12 +201,10 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
           </button>
         </div>
 
-        {/* Content Canvas */}
         <main className={styles.canvas}>
           <div className={styles.auraTop} />
 
-          <div className={styles.onboardingCard}>
-            {/* Window Sub-Header & Mascot Badge */}
+          <form className={styles.onboardingCard} onSubmit={(e) => void handleSubmit(e)}>
             <div className={styles.cardHeader}>
               <div className={styles.cardHeaderBrand}>
                 <div className={styles.mascotBadge}>
@@ -203,29 +214,30 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
                 <div className={styles.cardHeaderTitles}>
                   <span className={styles.cardTitle}>Elfy</span>
                   <span className={styles.cardSubtitle}>
-                    {isExistingUser ? 'Persona Profile' : 'Version v1.0'}
+                    {isExistingUser ? 'Persona & Privacy' : 'Local Mesh Setup'}
                   </span>
                 </div>
               </div>
+
+              <div className={styles.discoveryBadge}>
+                <span className={styles.discoveryDot} />
+                <span>MACHINE LOCKED</span>
+              </div>
             </div>
 
-            {/* Welcome Lead In */}
             <div className={styles.welcomeWrap}>
               <h1 className={styles.welcomeHeading}>
-                {isExistingUser ? (
-                  <>Update your <span className={styles.welcomeAccent}>Persona</span></>
-                ) : (
-                  <>Welcome to <span className={styles.welcomeAccent}>Elfy</span></>
-                )}
+                {isExistingUser ? 'Update your ' : 'Welcome to '}
+                <span className={styles.welcomeAccent}>
+                  {isExistingUser ? 'Persona' : 'Elfy'}
+                </span>
               </h1>
               <p className={styles.welcomeDesc}>
-                {isExistingUser
-                  ? 'Update your name and avatar anytime. Your peer tag is permanently assigned to this machine.'
-                  : 'Pick your alias and avatar for your local mesh hubs. Zero logins, no passwords, strictly peer-to-peer.'}
+                Update your nickname and avatar anytime. Your peer tag is permanently locked to
+                this machine and backed by local SQLite storage.
               </p>
             </div>
 
-            {/* Persona Avatar Mosaic */}
             <div className={styles.avatarSection}>
               <div className={styles.avatarHeaderRow}>
                 <span className={styles.avatarSectionLabel}>Select Persona Avatar</span>
@@ -235,16 +247,14 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
               </div>
 
               <div className={styles.avatarMainRow}>
-                {/* Hero Avatar Preview */}
                 <div className={styles.heroAvatarWrap}>
                   <div className={styles.heroAvatarBorder}>
                     <div className={styles.heroAvatarInner}>
-                      <img src={currentAvatarUrl} alt="Active Avatar" className={styles.heroAvatarImg} />
+                      <img src={selectedAvatar.url} alt="Active Avatar" className={styles.heroAvatarImg} />
                     </div>
                   </div>
                 </div>
 
-                {/* Swatches Grid */}
                 <div className={styles.swatchesContainer}>
                   <div className={styles.swatchesGrid}>
                     {AVATAR_OPTIONS.map((opt) => {
@@ -270,7 +280,6 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
               </div>
             </div>
 
-            {/* Handle Alias Input & Randomizer */}
             <div className={styles.aliasSection}>
               <div className={styles.aliasHeader}>
                 <span className={styles.aliasLabel}>Your Nickname</span>
@@ -287,29 +296,29 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
                     type="text"
                     maxLength={20}
                     value={nickname}
+                    disabled={isLoading}
                     placeholder="e.g. Nova, CozyPixie, Kitsune"
-                    onChange={(e) => setNickname(e.target.value)}
+                    onChange={(e) => handleNicknameChange(e.target.value)}
                   />
                   <span
                     className={styles.tagSuffix}
-                    title={isExistingUser ? "Peer tag is permanent for this machine" : undefined}
+                    data-testid="locked-peer-tag"
+                    title="Peer tag is permanently locked to this machine"
                   >
-                    #{peerTag}
-                    {isExistingUser && (
-                      <span
-                        className="material-symbols-outlined"
-                        style={{ fontSize: '13px', marginLeft: '4px', verticalAlign: 'middle', opacity: 0.7 }}
-                      >
-                        lock
-                      </span>
-                    )}
+                    #{lockedTag}
+                    <span
+                      className="material-symbols-outlined"
+                      style={{ fontSize: '13px', marginLeft: '4px', verticalAlign: 'middle', opacity: 0.75 }}
+                    >
+                      lock
+                    </span>
                   </span>
                 </div>
 
                 <button
                   className={`${styles.diceBtn} ${isSpinning ? styles.diceSpin : ''}`}
                   onClick={handleRollDice}
-                  title={isExistingUser ? "Roll random nickname (Peer tag is locked)" : "Roll random cute alias"}
+                  title="Roll random nickname (Peer tag stays locked)"
                   type="button"
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
@@ -318,79 +327,88 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
                 </button>
               </div>
 
-              {/* Public ID Live Preview */}
               <div className={styles.idPreviewRow}>
                 <div className={styles.previewIdWrap}>
                   <span>PUBLIC ID:</span>
                   <span className={styles.previewPill}>
-                    {(nickname.trim() || 'Companion') + "#" + peerTag}
+                    {displayNickname}#{lockedTag}
                   </span>
-                  <span
-                    className={`material-symbols-outlined ${styles.copyIdIcon}`}
-                    style={{ fontSize: '13px' }}
+                  <button
+                    className={styles.copyIconBtn}
                     onClick={handleCopyId}
                     title="Copy identifier"
+                    type="button"
                   >
-                    content_copy
-                  </span>
+                    <span className={`material-symbols-outlined ${styles.copyIdIcon}`} style={{ fontSize: '13px' }}>
+                      content_copy
+                    </span>
+                  </button>
                 </div>
               </div>
             </div>
 
-            {/* CTA Submit Button */}
+            <div className={styles.toggleCard}>
+              <div className={styles.toggleLeft}>
+                <div className={styles.toggleIconBox}>
+                  <span className="material-symbols-outlined" style={{ fontSize: '17px' }}>
+                    monitoring
+                  </span>
+                </div>
+                <div className={styles.toggleTextGroup}>
+                  <span className={styles.toggleTitle}>Anonymous Performance Telemetry</span>
+                  <span className={styles.toggleDesc}>
+                    Shares FPS, latency, and load tier only. Never nicknames, hubs, or video.
+                  </span>
+                </div>
+              </div>
+
+              <button
+                aria-checked={telemetryEnabled}
+                aria-label="Toggle anonymous performance telemetry"
+                className={`${styles.toggleSwitchBtn} ${telemetryEnabled ? styles.toggleSwitchActive : ''}`}
+                data-testid="telemetry-toggle"
+                disabled={isUpdatingTelemetry || isLoading}
+                onClick={() => void handleToggleTelemetry()}
+                role="switch"
+                type="button"
+              >
+                <span className={styles.toggleThumb} />
+              </button>
+            </div>
+
+            {errorMessage && (
+              <p className={styles.errorText} role="alert">
+                {errorMessage}
+              </p>
+            )}
+
             <div className={styles.ctaWrap}>
               <button
                 className={`${styles.ctaBtn} ${isSuccess ? styles.ctaSuccess : ''}`}
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                type="button"
+                disabled={isSubmitting || isLoading}
+                type="submit"
               >
-                {isSubmitting ? (
-                  <>
-                    <span
-                      className="material-symbols-outlined"
-                      style={{ fontSize: '16px', animation: 'spin 1s infinite linear' }}
-                    >
-                      sync
-                    </span>
-                    <span>Saving Persona...</span>
-                  </>
-                ) : isSuccess ? (
-                  <>
-                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                      check_circle
-                    </span>
-                    <span>Saved!</span>
-                  </>
-                ) : isExistingUser ? (
-                  <>
-                    <span>Save Changes</span>
-                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                      check
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span>Get Started</span>
-                    <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                      arrow_forward
-                    </span>
-                  </>
-                )}
+                <span
+                  className={`material-symbols-outlined ${submitState.spinning ? styles.spinIcon : ''}`}
+                  style={{ fontSize: '16px' }}
+                >
+                  {submitState.icon}
+                </span>
+                <span>{submitState.text}</span>
               </button>
 
               <div className={styles.privacyNote}>
                 <span className={`material-symbols-outlined ${styles.lockIcon}`}>lock</span>
                 <span>
-                  {isExistingUser
-                    ? 'Peer tag permanently registered to this device in Dexie DB.'
-                    : 'Stored locally. Peer-to-peer only.'}
+                  Peer tag is permanently registered to this machine in SQLite local storage.
                 </span>
               </div>
             </div>
-          </div>
+          </form>
         </main>
       </div>
     </div>
   );
 };
+
+export default ChooseNickname;

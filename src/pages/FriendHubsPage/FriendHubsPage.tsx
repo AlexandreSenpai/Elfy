@@ -1,58 +1,68 @@
-import React, { useState } from 'react';
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import styles from './FriendHubsPage.module.css';
-import { INITIAL_FRIEND_HUBS } from '../../data/mockData';
 import { FriendHubs } from '../../components/FriendHubs/FriendHubs';
-import {
-  isTauri,
-  openStreamWindowTauri,
-  showRegisterWindowTauri
-} from '../../utils/tauri';
+import { RoomRole } from '../../domain/dtos';
+import { useFriendHubsDiscovery } from '../../hooks/useFriendHubsDiscovery';
 import { useProfile } from '../../hooks/useProfile';
+import { isHubOwner } from '../../utils/hubTopics';
+import { isTauri, openStreamWindowTauri, showRegisterWindowTauri } from '../../utils/tauri';
 
-interface FriendHubsPageProps {}
+export const FriendHubsPage: React.FC = () => {
+  const navigate = useNavigate();
+  const { profile, isLoading: isProfileLoading } = useProfile();
+  const {
+    hubs,
+    isProbing,
+    minimizedHub,
+    refreshHubsStatus,
+    removeFriendHub,
+    restoreMinimizedHub,
+    disconnectMinimizedHub,
+  } = useFriendHubsDiscovery(profile);
 
-export const FriendHubsPage: React.FC<FriendHubsPageProps> = () => {
-  const { profile } = useProfile();
-  const [isSharing, setIsSharing] = useState(false);
-
-  const handleOpenHub = async (hubId: string, autoStart: boolean = false) => {
-    const isMine =
-      hubId.includes(profile.nickname) &&
-      hubId.includes(profile.peerTag.replace('#', ''));
-    const joinedAs: 'owner' | 'guest' = isMine ? 'owner' : 'guest';
+  const handleOpenHub = async (hubId: string, autoStart: boolean = false): Promise<void> => {
+    const joinedAs: RoomRole = isHubOwner(hubId, profile) ? 'owner' : 'guest';
 
     if (isTauri()) {
       await openStreamWindowTauri(hubId, autoStart, joinedAs);
-    } else {
-      window.open(
-        `/#/stream?hubId=${encodeURIComponent(hubId)}&autoStart=${autoStart}&joinedAs=${joinedAs}`,
-        '_blank',
-        'width=1280,height=720'
-      );
+      return;
     }
+
+    const query = `hubId=${encodeURIComponent(hubId)}&autoStart=${String(autoStart)}&joinedAs=${joinedAs}`;
+    navigate(`/stream?${query}`);
   };
 
-  const handleOpenProfileWindow = async () => {
+  const handleOpenProfileWindow = async (): Promise<void> => {
     if (isTauri()) {
       await showRegisterWindowTauri();
-    } else {
-      window.open('/#/register', '_blank', 'width=580,height=620');
+      return;
     }
+    navigate('/register');
   };
 
-  const handleStopShare = () => {
-    setIsSharing(false);
+  const handleRestoreMinimized = async (): Promise<void> => {
+    await restoreMinimizedHub();
+    if (!minimizedHub || isTauri()) return;
+    const query =
+      `hubId=${encodeURIComponent(minimizedHub.hubId)}&autoStart=false&joinedAs=${minimizedHub.role}`;
+    navigate(`/stream?${query}`);
   };
 
   return (
     <div className={styles.companionWrapper}>
       <FriendHubs
         profile={profile}
-        hubs={INITIAL_FRIEND_HUBS}
-        isSharing={isSharing}
+        isProfileLoading={isProfileLoading}
+        hubs={hubs}
+        isProbing={isProbing}
+        minimizedHub={minimizedHub}
         onOpenHub={handleOpenHub}
         onOpenProfile={handleOpenProfileWindow}
-        onStopShare={handleStopShare}
+        onRefreshHubs={refreshHubsStatus}
+        onRemoveHub={removeFriendHub}
+        onRestoreMinimizedHub={handleRestoreMinimized}
+        onDisconnectMinimizedHub={disconnectMinimizedHub}
       />
     </div>
   );

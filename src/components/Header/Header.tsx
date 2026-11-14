@@ -1,73 +1,93 @@
 import React, { useState } from 'react';
 import styles from './Header.module.css';
-import { UserProfile } from '../../types';
+import { UserProfile } from '../../domain/dtos';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
+import { formatFullPeerTag } from '../../utils/hubTopics';
 import {
   closeStreamWindowTauri,
+  isTauri,
   minimizeWindowTauri,
   startDraggingTauri,
-  toggleMaximizeWindowTauri
+  toggleMaximizeWindowTauri,
 } from '../../utils/tauri';
 
 interface HeaderProps {
   profile: UserProfile;
+  roomTitle: string;
   activeStreamsCount: number;
-  onCloseStream?: () => void;
-  onOpenProfile?: () => void;
-  roomTitle?: string;
+  rttMs?: number;
+  isConnected?: boolean;
+  onMinimizeHub?: () => void | Promise<void>;
+  onCloseStream?: () => void | Promise<void>;
+  onOpenProfile?: () => void | Promise<void>;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   profile,
+  roomTitle,
   activeStreamsCount,
+  rttMs = 0,
+  isConnected = false,
+  onMinimizeHub,
   onCloseStream,
-  onOpenProfile
+  onOpenProfile,
 }) => {
   const [copied, setCopied] = useState(false);
 
-  const handleCopyLink = () => {
-    navigator.clipboard?.writeText('elfy.link/treehouse').catch(() => {});
+  const fallbackHub = `elfy/hub/${formatFullPeerTag(profile.nickname, profile.peerTag)}`;
+  const effectiveRoomTitle = roomTitle || fallbackHub;
+
+  const getConnectionText = (): string => {
+    if (rttMs > 0) return `${Math.round(rttMs)}ms P2P`;
+    if (isConnected) return 'P2P Ready';
+    return 'Connecting...';
+  };
+
+  const handleCopyLink = (): void => {
+    navigator.clipboard?.writeText(effectiveRoomTitle).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    window.setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleMinimize = async () => {
-    await minimizeWindowTauri();
+  const handleMinimizeWindow = async (): Promise<void> => {
+    if (isTauri()) {
+      await minimizeWindowTauri();
+      return;
+    }
+    await onMinimizeHub?.();
   };
 
-  const handleMaximize = async () => {
+  const handleMaximizeWindow = async (): Promise<void> => {
     await toggleMaximizeWindowTauri();
   };
 
-  const handleClose = async () => {
-    if (onCloseStream) {
-      onCloseStream();
+  const handleClose = async (): Promise<void> => {
+    await onCloseStream?.();
+    if (isTauri()) {
+      await closeStreamWindowTauri();
     }
-    await closeStreamWindowTauri();
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = (e: React.MouseEvent): void => {
     if (e.button !== 0) return;
     const target = e.target as HTMLElement | null;
     if (target?.closest('button, input, select, textarea, a, [role="button"], [data-no-drag]')) {
       return;
     }
-    // Double click to toggle maximize/restore
     if (e.detail === 2) {
       e.preventDefault();
-      toggleMaximizeWindowTauri();
+      void toggleMaximizeWindowTauri();
       return;
     }
-    // Single click starts dragging immediately
     startDraggingTauri();
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
+  const handleDoubleClick = (e: React.MouseEvent): void => {
     const target = e.target as HTMLElement | null;
     if (target?.closest('button, input, select, textarea, a, [role="button"], [data-no-drag]')) {
       return;
     }
-    toggleMaximizeWindowTauri();
+    void toggleMaximizeWindowTauri();
   };
 
   return (
@@ -76,7 +96,6 @@ export const Header: React.FC<HeaderProps> = ({
       onMouseDown={handleMouseDown}
       onDoubleClick={handleDoubleClick}
     >
-      {/* Left: Brand & Room Info (NO tab selector, NO mock mac dots) */}
       <div className={styles.leftSection}>
         <div className={styles.brandWrap}>
           <div className={styles.mascotLogo}>
@@ -88,46 +107,59 @@ export const Header: React.FC<HeaderProps> = ({
         <span className={styles.slashDivider}>/</span>
 
         <div className={styles.roomInfo}>
-
+          <span className={styles.roomName} title={effectiveRoomTitle}>
+            {effectiveRoomTitle}
+          </span>
           <span className={styles.activeBadge}>
-            {activeStreamsCount} Streams Active
+            {activeStreamsCount} {activeStreamsCount === 1 ? 'Stream' : 'Streams'} Active
           </span>
         </div>
       </div>
 
-      {/* Right: Latency, Quick Copy, Avatar, and Real Window Controls */}
       <div className={styles.rightSection}>
         <div className={styles.meshBadge}>
-          <span className={styles.pulseDot} />
-          <span>12ms P2P Mesh</span>
+          <span className={`${styles.pulseDot} ${!isConnected ? styles.pulseDotIdle : ''}`} />
+          <span>{getConnectionText()}</span>
         </div>
 
-        <button className={styles.inviteBtn} onClick={handleCopyLink} type="button">
+        <button className={styles.inviteBtn} onClick={handleCopyLink} title="Copy Hub Invite Code" type="button">
           <span className={`material-symbols-outlined ${styles.inviteIcon}`}>link</span>
-          <span className={styles.inviteText}>elfy/hub/{profile.nickname}{profile.peerTag}</span>
+          <span className={styles.inviteText}>{effectiveRoomTitle}</span>
           {copied && <span className={styles.copiedTag}>Copied!</span>}
         </button>
 
-        <div
+        {onMinimizeHub && (
+          <button
+            className={styles.quickMinBtn}
+            onClick={() => void onMinimizeHub()}
+            title="Minimize Hub to Companion Bar"
+            type="button"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+              picture_in_picture_alt
+            </span>
+          </button>
+        )}
+
+        <button
+          aria-label={`Edit Persona (${profile.nickname}${profile.peerTag})`}
           className={styles.avatarWrap}
-          onClick={onOpenProfile}
-          role="button"
-          tabIndex={0}
           data-no-drag="true"
+          onClick={() => void onOpenProfile?.()}
           title={`Edit Persona (${profile.nickname}${profile.peerTag})`}
+          type="button"
         >
           <div className={styles.userAvatar}>
             <img src={profile.avatarUrl} alt={profile.nickname} className={styles.avatarImg} />
           </div>
           <span className={styles.onlineIndicator} />
-        </div>
+        </button>
 
-        {/* Real Desktop Window Actions */}
         <div className={styles.windowActions}>
           <button
             className={styles.winBtn}
-            onClick={handleMinimize}
-            title="Minimize"
+            onClick={() => void handleMinimizeWindow()}
+            title="Minimize Window"
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
@@ -135,21 +167,23 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           </button>
 
-          <button
-            className={styles.winBtn}
-            onClick={handleMaximize}
-            title="Maximize / Restore"
-            type="button"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-              crop_square
-            </span>
-          </button>
+          {isTauri() && (
+            <button
+              className={styles.winBtn}
+              onClick={() => void handleMaximizeWindow()}
+              title="Maximize / Restore"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                crop_square
+              </span>
+            </button>
+          )}
 
           <button
             className={`${styles.winBtn} ${styles.winBtnClose}`}
-            onClick={handleClose}
-            title="Close Stream Window"
+            onClick={() => void handleClose()}
+            title="Close Watch Room"
             type="button"
           >
             <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
@@ -161,3 +195,5 @@ export const Header: React.FC<HeaderProps> = ({
     </header>
   );
 };
+
+export default Header;

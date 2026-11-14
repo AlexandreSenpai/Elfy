@@ -1,30 +1,44 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
+import { TelemetryConsentModal } from './components/TelemetryConsentModal/TelemetryConsentModal';
+import { useProfile } from './hooks/useProfile';
+import { TelemetryConsentState } from './domain/dtos';
 import { isTauri, showRegisterWindowTauri } from './utils/tauri';
 
 export const App: React.FC = () => {
-  const [isRegistered, setIsRegistered] = useState(() => {
-    return Boolean(localStorage.getItem('elfy_user_registered'));
-  });
+  const { isLoading, isRegistered, telemetryConsent, setTelemetryConsent } = useProfile();
+  const [isUpdatingConsent, setIsUpdatingConsent] = useState(false);
 
-  // On first access in Tauri main window: trigger the standalone registration window
   useEffect(() => {
-    if (!isRegistered && isTauri() && (window.location.hash === '#/' || window.location.hash === '')) {
-      showRegisterWindowTauri().catch(console.error);
+    if (isLoading || isRegistered || !isTauri()) return;
+    const isMainHash = window.location.hash === '#/' || window.location.hash === '';
+    if (!isMainHash) return;
+    showRegisterWindowTauri().catch(console.error);
+  }, [isLoading, isRegistered]);
+
+  const handleConsentDecision = async (decision: TelemetryConsentState): Promise<void> => {
+    if (isUpdatingConsent) return;
+    setIsUpdatingConsent(true);
+    try {
+      await setTelemetryConsent(decision);
+    } finally {
+      setIsUpdatingConsent(false);
     }
-  }, [isRegistered]);
+  };
 
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'elfy_user_registered') {
-        setIsRegistered(Boolean(e.newValue));
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
+  const shouldShowConsentModal = !isLoading && telemetryConsent === 'unset';
 
-  return <Outlet />;
+  return (
+    <>
+      <Outlet />
+      <TelemetryConsentModal
+        isOpen={shouldShowConsentModal}
+        isSubmitting={isUpdatingConsent}
+        onAgree={() => handleConsentDecision('granted')}
+        onDecline={() => handleConsentDecision('denied')}
+      />
+    </>
+  );
 };
 
 export default App;

@@ -1,33 +1,63 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import styles from './FullscreenStreamViewer.module.css';
-import { StreamItem } from '../../types';
+import { StreamItem } from '../../domain/dtos';
+import { ELFY_MASCOT_ICON } from '../../data/mockData';
 
 interface FullscreenStreamViewerProps {
   stream: StreamItem;
   mediaStream: MediaStream | null;
-  onExitFullscreen: () => void;
+  onExitFullscreen: () => void | Promise<void>;
   onVolumeChange: (vol: number) => void;
 }
+
+const getVolumeIcon = (volume: number): string => {
+  if (volume === 0) return 'volume_off';
+  if (volume < 50) return 'volume_down';
+  return 'volume_up';
+};
 
 export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
   stream,
   mediaStream,
   onExitFullscreen,
-  onVolumeChange
+  onVolumeChange,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hideTimerRef = useRef<number | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
 
-  // Hook up media stream to video element
   useEffect(() => {
-    if (videoRef.current && mediaStream) {
-      videoRef.current.srcObject = mediaStream;
-      videoRef.current.play().catch(() => {});
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (!mediaStream) {
+      videoEl.srcObject = null;
+      return;
     }
+
+    const syncPlayback = (): void => {
+      videoEl.srcObject = mediaStream;
+      videoEl.play().catch(() => {});
+    };
+
+    syncPlayback();
+    mediaStream.addEventListener('addtrack', syncPlayback);
+    mediaStream.addEventListener('removetrack', syncPlayback);
+
+    return () => {
+      mediaStream.removeEventListener('addtrack', syncPlayback);
+      mediaStream.removeEventListener('removetrack', syncPlayback);
+      videoEl.srcObject = null;
+    };
   }, [mediaStream]);
 
-  // Reset inactivity timer on mouse move
+  useEffect(() => {
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+    videoEl.muted = stream.isLocal || stream.volume === 0;
+    videoEl.volume = Math.max(0, Math.min(1, stream.volume / 100));
+  }, [stream.isLocal, stream.volume]);
+
   const showControlsTemporarily = useCallback(() => {
     setControlsVisible(true);
     if (hideTimerRef.current !== null) {
@@ -47,66 +77,52 @@ export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
     };
   }, [showControlsTemporarily]);
 
-  // Escape key exits fullscreen
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onExitFullscreen();
-      }
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      void onExitFullscreen();
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onExitFullscreen]);
 
-  const handleDoubleClick = () => {
-    onExitFullscreen();
+  const handleToggleMute = (): void => {
+    const nextVolume = stream.volume === 0 ? 100 : 0;
+    onVolumeChange(nextVolume);
   };
 
-  const isMuted = stream.volume === 0;
-
-  const handleToggleMute = () => {
-    if (isMuted) {
-      onVolumeChange(100);
-    } else {
-      onVolumeChange(0);
-    }
-  };
+  const avatarSrc = stream.avatarUrl || ELFY_MASCOT_ICON;
 
   return (
     <div
       className={`${styles.fullscreenContainer} ${!controlsVisible ? styles.cursorHidden : ''}`}
+      data-testid="fullscreen-stream-viewer"
       onMouseMove={showControlsTemporarily}
-      onDoubleClick={handleDoubleClick}
+      onDoubleClick={() => void onExitFullscreen()}
     >
-      {/* 100vw x 100vh Video Display */}
-      <div
-        className={styles.fullscreenVideoArea}
-        style={!mediaStream && stream.previewImage ? { backgroundImage: `url(${stream.previewImage})` } : undefined}
-      >
-        {mediaStream ? (
+      <div className={styles.fullscreenVideoArea}>
+        {mediaStream && (
           <video
             ref={videoRef}
             autoPlay
             playsInline
-            muted={stream.isLocal}
+            muted={stream.isLocal || stream.volume === 0}
             disablePictureInPicture
             className={styles.fullscreenVideo}
           />
-        ) : null}
+        )}
       </div>
 
-      {/* Floating Controls Overlay (Auto-hiding) */}
       <div
         className={`${styles.controlsOverlay} ${controlsVisible ? styles.controlsVisible : styles.controlsHidden}`}
         onMouseMove={showControlsTemporarily}
       >
-        {/* Top Floating Bar */}
-        <div className={styles.topBar}>
+        <div className={styles.topBar} onDoubleClick={(e) => e.stopPropagation()}>
           <div className={styles.streamerInfo}>
             <div className={styles.streamerAvatarWrap}>
-              <img src={stream.avatarUrl} alt={stream.name} className={styles.streamerAvatar} />
+              <img src={avatarSrc} alt={stream.name} className={styles.streamerAvatar} />
               <span className={styles.liveDotSmall} />
             </div>
             <div className={styles.streamerMeta}>
@@ -124,7 +140,8 @@ export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
           <div className={styles.topActions}>
             <button
               className={styles.exitFullscreenBtn}
-              onClick={onExitFullscreen}
+              data-testid="exit-fullscreen-btn"
+              onClick={() => void onExitFullscreen()}
               title="Exit Fullscreen (Esc)"
               type="button"
             >
@@ -137,31 +154,35 @@ export const FullscreenStreamViewer: React.FC<FullscreenStreamViewerProps> = ({
           </div>
         </div>
 
-        {/* Bottom Floating Bar */}
-        <div className={styles.bottomBar}>
-          <div className={styles.volumeControl}>
-            <button
-              className={styles.volumeBtn}
-              onClick={handleToggleMute}
-              title={isMuted ? 'Unmute' : 'Mute'}
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                {isMuted ? 'volume_off' : stream.volume < 50 ? 'volume_down' : 'volume_up'}
-              </span>
-            </button>
+        {!stream.isLocal && (
+          <div className={styles.bottomBar} onDoubleClick={(e) => e.stopPropagation()}>
+            <div className={styles.volumeControl}>
+              <button
+                className={styles.volumeBtn}
+                onClick={handleToggleMute}
+                title={stream.volume === 0 ? 'Unmute' : 'Mute'}
+                type="button"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                  {getVolumeIcon(stream.volume)}
+                </span>
+              </button>
 
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={stream.volume}
-              onChange={(e) => onVolumeChange(Number(e.target.value))}
-              className={styles.volumeSlider}
-            />
+              <input
+                aria-label="Fullscreen stream volume"
+                type="range"
+                min="0"
+                max="100"
+                value={stream.volume}
+                onChange={(e) => onVolumeChange(Number(e.target.value))}
+                className={styles.volumeSlider}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
 };
+
+export default FullscreenStreamViewer;

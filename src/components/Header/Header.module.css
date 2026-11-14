@@ -1,10 +1,12 @@
 .header {
   height: 52px;
   width: 100%;
-  padding: 0 12px 0 16px;
+  min-width: 0;
+  padding: 0 10px 0 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid var(--outline-variant);
   background-color: rgba(11, 15, 20, 0.95);
   backdrop-filter: blur(20px);
@@ -20,28 +22,33 @@
 .brandTitle,
 .slashDivider,
 .activeBadge,
-.mascotLogo {
+.mascotLogo,
+.meshBadge {
   pointer-events: none;
 }
 
 .rightSection {
   pointer-events: auto;
-}
-
-.meshBadge {
-  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .leftSection {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
 }
 
 .brandWrap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .mascotLogo {
@@ -74,25 +81,30 @@
   color: var(--on-surface-muted);
   font-size: 13px;
   font-family: var(--font-mono);
+  flex-shrink: 0;
 }
 
 .roomInfo {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .roomName {
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-weight: 600;
   color: var(--on-surface);
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .activeBadge {
   display: inline-flex;
+  flex-shrink: 0;
   padding: 2px 8px;
   border-radius: var(--radius-full);
   background-color: rgba(255, 77, 109, 0.15);
@@ -101,13 +113,6 @@
   font-family: var(--font-mono);
   font-weight: 600;
   border: 1px solid rgba(255, 77, 109, 0.3);
-}
-
-/* Right Section */
-.rightSection {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .meshBadge {
@@ -133,11 +138,17 @@
   animation: pulse 2s infinite ease-in-out;
 }
 
+.pulseDotIdle {
+  background-color: var(--tertiary);
+  box-shadow: none;
+}
+
 .inviteBtn {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  max-width: 220px;
+  padding: 4px 10px;
   border-radius: var(--radius-full);
   background-color: var(--surface-container);
   color: var(--on-surface);
@@ -156,11 +167,15 @@
 .inviteIcon {
   font-size: 16px;
   color: var(--primary);
+  flex-shrink: 0;
 }
 
 .inviteText {
   font-family: var(--font-mono);
   font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .copiedTag {
@@ -168,13 +183,34 @@
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 700;
-  margin-left: 4px;
+  flex-shrink: 0;
+}
+
+.quickMinBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.quickMinBtn:hover {
+  color: var(--on-surface);
+  border-color: var(--primary);
 }
 
 .avatarWrap {
   position: relative;
   cursor: pointer;
-  margin-right: 4px;
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 .userAvatar {
@@ -217,16 +253,15 @@
   display: flex;
   align-items: center;
   border-left: 1px solid var(--outline-variant);
-  margin-left: 6px;
-  padding-left: 8px;
+  padding-left: 6px;
 }
 
 .winBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius-sm);
   background: transparent;
   border: none;
@@ -245,8 +280,37 @@
   color: #ffffff !important;
 }
 
-@media (max-width: 800px) {
-  .meshBadge, .roomInfo, .slashDivider {
+@media (max-width: 900px) {
+  .meshBadge,
+  .roomName,
+  .slashDivider {
     display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .inviteBtn {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .header {
+    padding: 0 8px;
+  }
+
+  .brandTitle,
+  .quickMinBtn {
+    display: none;
+  }
+
+  .activeBadge {
+    font-size: 10px;
+    padding: 2px 6px;
+  }
+
+  .winBtn {
+    width: 28px;
+    height: 28px;
   }
 }

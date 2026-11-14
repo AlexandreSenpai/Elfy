@@ -36,7 +36,6 @@
   flex-shrink: 0;
 }
 
-.titleLeft,
 .titleMascot,
 .titleCenter,
 .boltIcon {
@@ -45,6 +44,22 @@
 
 .closeSetupBtn {
   pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--on-surface-variant);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.closeSetupBtn:hover {
+  background-color: var(--surface-container-high);
+  color: var(--on-surface);
 }
 
 .titleMascot {
@@ -76,25 +91,6 @@
   font-size: 15px;
 }
 
-.closeSetupBtn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  border: none;
-  color: var(--on-surface-variant);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.closeSetupBtn:hover {
-  background-color: var(--surface-container-high);
-  color: var(--on-surface);
-}
-
 /* Content Canvas */
 .canvas {
   position: relative;
@@ -104,8 +100,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .auraTop {
@@ -126,9 +123,11 @@
   position: relative;
   z-index: 1;
   width: 100%;
+  max-width: 540px;
+  margin: auto 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
 /* Card Header */
@@ -136,6 +135,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .cardHeaderBrand {
@@ -146,15 +147,17 @@
 
 .mascotBadge {
   position: relative;
-  width: 50px;
-  height: 50px;
+  width: 44px;
+  height: 44px;
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
 }
 
 .mascotBadge img {
   width: inherit;
+  height: inherit;
   object-fit: cover;
 }
 
@@ -215,11 +218,11 @@
 .welcomeWrap {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 
 .welcomeHeading {
-  font-size: 22px;
+  font-size: 21px;
   font-weight: 800;
   color: var(--on-surface);
   letter-spacing: -0.02em;
@@ -232,7 +235,7 @@
 .welcomeDesc {
   font-size: 12px;
   color: var(--on-surface-variant);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* Avatar Mosaic Box */
@@ -250,6 +253,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 
 .avatarSectionLabel {
@@ -281,32 +285,18 @@
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
 
 .heroAvatarWrap {
   position: relative;
-  cursor: pointer;
   flex-shrink: 0;
-}
-
-.heroAvatarAura {
-  position: absolute;
-  inset: -4px;
-  border-radius: 50%;
-  background-color: rgba(255, 77, 109, 0.3);
-  filter: blur(8px);
-  transition: all 0.25s;
-}
-
-.heroAvatarWrap:hover .heroAvatarAura {
-  background-color: rgba(255, 77, 109, 0.6);
-  filter: blur(12px);
 }
 
 .heroAvatarBorder {
   position: relative;
-  width: 64px;
-  height: 64px;
+  width: 62px;
+  height: 62px;
   border-radius: 50%;
   padding: 2.5px;
   background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
@@ -330,24 +320,10 @@
   object-fit: cover;
 }
 
-.editBadge {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background-color: var(--primary);
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--shadow-sm);
-}
-
 /* Swatches Grid */
 .swatchesContainer {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -355,13 +331,13 @@
 
 .swatchesGrid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
 }
 
 .swatchBtn {
   border-radius: var(--radius-sm);
-  padding: 4px 2px;
+  padding: 5px 2px;
   background-color: var(--surface-low);
   border: 1px solid var(--outline-variant);
   display: flex;
@@ -371,6 +347,7 @@
   cursor: pointer;
   opacity: 0.75;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  min-width: 0;
 }
 
 .swatchBtn:hover {
@@ -382,13 +359,13 @@
   opacity: 1;
   background-color: var(--surface-container-high) !important;
   border-color: var(--primary) !important;
-  transform: scale(1.05);
+  transform: scale(1.03);
   box-shadow: 0 0 10px rgba(255, 77, 109, 0.3);
 }
 
 .swatchThumb {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   overflow: hidden;
   background-color: var(--surface-lowest);
@@ -405,6 +382,10 @@
   font-size: 9px;
   color: var(--on-surface-variant);
   font-weight: 500;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .swatchLabelActive {
@@ -412,44 +393,11 @@
   font-weight: 700;
 }
 
-.swatchesFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 2px;
-}
-
-.avatarSelectedDesc {
-  font-size: 11px;
-  color: var(--on-surface-variant);
-}
-
-.avatarSelectedDesc strong {
-  color: var(--on-surface);
-}
-
-.uploadCustomBtn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  background: transparent;
-  border: none;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--on-surface-variant);
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.uploadCustomBtn:hover {
-  color: var(--on-surface);
-}
-
 /* Alias Input */
 .aliasSection {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
 .aliasHeader {
@@ -475,30 +423,34 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .inputCapsule {
   position: relative;
   flex: 1;
+  min-width: 0;
   background-color: var(--surface-lowest);
   border: 1px solid var(--outline-variant);
   border-radius: var(--radius-md);
   padding: 2px 10px;
   display: flex;
   align-items: center;
+  gap: 6px;
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
 }
 
 .inputBadgeIcon {
   color: var(--on-surface-muted);
-  margin-right: 6px;
+  flex-shrink: 0;
 }
 
 .aliasTextInput {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
-  padding: 6px 0;
+  padding: 7px 0;
   font-size: 14px;
   font-weight: 700;
   color: var(--on-surface);
@@ -510,12 +462,15 @@
   font-size: 11px;
   color: var(--secondary);
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .diceBtn {
   width: 38px;
   height: 38px;
+  flex-shrink: 0;
   border-radius: var(--radius-md);
   background-color: var(--surface-container-high);
   border: 1px solid var(--outline-variant);
@@ -547,6 +502,7 @@
 .previewIdWrap {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   font-family: var(--font-mono);
   font-size: 10px;
@@ -559,55 +515,63 @@
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 700;
+  word-break: break-all;
+}
+
+.copyIconBtn {
+  background: transparent;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 2px;
 }
 
 .copyIdIcon {
-  cursor: pointer;
   color: var(--on-surface-muted);
   transition: color 0.2s;
 }
 
-.copyIdIcon:hover {
+.copyIconBtn:hover .copyIdIcon {
   color: var(--on-surface);
 }
 
-.lanNote {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  color: var(--on-surface-muted);
-}
-
-/* Auto-broadcast toggle card */
+/* Telemetry Opt-In/Opt-Out toggle card */
 .toggleCard {
-  background-color: rgba(9, 14, 22, 0.6);
+  background-color: rgba(9, 14, 22, 0.65);
   border: 1px solid var(--outline-variant);
   border-radius: var(--radius-md);
   padding: 10px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .toggleLeft {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .toggleIconBox {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--radius-sm);
   background-color: var(--surface-container-high);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--primary);
+  flex-shrink: 0;
 }
 
 .toggleTextGroup {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .toggleTitle {
@@ -619,49 +583,51 @@
 .toggleDesc {
   font-size: 10px;
   color: var(--on-surface-variant);
+  line-height: 1.35;
 }
 
-/* Switch control */
-.switchLabel {
+.toggleSwitchBtn {
   position: relative;
-  display: inline-block;
-  width: 38px;
-  height: 20px;
-  cursor: pointer;
-}
-
-.switchInput {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.switchSlider {
-  position: absolute;
-  inset: 0;
-  background-color: var(--surface-container-highest);
+  width: 44px;
+  height: 24px;
   border-radius: var(--radius-full);
-  transition: all 0.3s;
+  background-color: var(--surface-container-highest);
+  border: 1px solid var(--outline-variant);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  padding: 0;
 }
 
-.switchSlider::before {
-  position: absolute;
-  content: "";
-  height: 14px;
-  width: 14px;
-  left: 3px;
-  bottom: 3px;
-  background-color: var(--on-surface);
-  border-radius: 50%;
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.switchInput:checked + .switchSlider {
+.toggleSwitchActive {
   background-color: var(--primary);
+  border-color: var(--primary);
 }
 
-.switchInput:checked + .switchSlider::before {
-  transform: translateX(18px);
+.toggleThumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toggleSwitchActive .toggleThumb {
+  transform: translateX(20px);
+}
+
+.toggleSwitchBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.errorText {
+  font-size: 11px;
+  color: var(--error);
+  text-align: center;
 }
 
 /* CTA Button */
@@ -690,13 +656,22 @@
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-.ctaBtn:hover {
+.ctaBtn:hover:not(:disabled) {
   filter: brightness(1.12);
   transform: translateY(-1px);
 }
 
+.ctaBtn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .ctaSuccess {
   background: linear-gradient(135deg, var(--secondary-container) 0%, #0087b8 100%) !important;
+}
+
+.spinIcon {
+  animation: spin 1s infinite linear;
 }
 
 .privacyNote {
@@ -712,8 +687,24 @@
 .lockIcon {
   color: var(--tertiary);
   font-size: 13px;
+  flex-shrink: 0;
 }
 
-.hiddenFileInput {
-  display: none;
+@media (max-width: 480px) {
+  .canvas {
+    padding: 12px;
+  }
+
+  .avatarMainRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .heroAvatarWrap {
+    align-self: center;
+  }
+
+  .swatchesGrid {
+    grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  }
 }
