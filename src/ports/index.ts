@@ -132,6 +132,7 @@ export interface IStreamEngine {
   closeAllPeers(): void;
   hasPeer(peerIdSafe: string): boolean;
   isPeerHealthy(peerIdSafe: string): boolean;
+  isPeerConnected(peerIdSafe: string): boolean;
   pingAndCleanupPeers(): string[];
   getConnectedPeerIds(): string[];
   getStatsSnapshot(): Promise<WebRtcStatsSnapshot>;

@@ -510,12 +510,31 @@ test('Test 9 — Host Pre-Shares Before Guest Knocks & Re-Share Recovery', async
 });
 
 test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ browser }) => {
+  test.setTimeout(60_000);
   const context = await createTrackedContext(browser);
-  const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't10');
+  const { owner, ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't10');
 
   await ownerRoom.getByTestId('toggle-share-btn').click();
   await waitForContinuousPlayback(guestRoom, 1, 800);
 
+  // Exact scenario: Host keeps sharing -> Guest leaves -> goes to Friend Hubs -> clicks Watch -> knocks -> accepted.
+  await guestRoom.getByTestId('leave-hub-btn').click();
+  await guestRoom.getByRole('button', { name: /friend hubs/i }).click();
+  const friendCard = guestRoom.getByTestId('friend-hub-card').first();
+  await expect(friendCard).toBeVisible();
+  await expect(friendCard.getByRole('button', { name: /watch/i })).toBeVisible({ timeout: 10_000 });
+  await friendCard.getByRole('button', { name: /watch/i }).click();
+
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeVisible();
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(guestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+  await expect(guestRoom.getByTestId('connection-failure-alert')).toBeHidden();
+  await waitForContinuousPlayback(guestRoom, 1, 1400);
+
+  // Also verify Re-join Hub button directly from the left-room screen while Host keeps sharing
   await guestRoom.getByTestId('leave-hub-btn').click();
   await expect(guestRoom.getByRole('button', { name: /re-join hub/i })).toBeVisible();
   await guestRoom.getByRole('button', { name: /re-join hub/i }).click();
@@ -546,9 +565,7 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
 
   // Simulate an ungraceful guest disconnect (no peer_left sent) and verify accepting
   // the returning knock cleans up the previous connection cleanly without duplicate peers.
-  const ownerUrl = ownerRoom.url();
-  const hubQuery = new URL(ownerUrl).hash.split('?')[1] ?? '';
-  const ownerHubId = new URLSearchParams(hubQuery).get('hubId') ?? '';
+  const ownerHubId = owner.hubCode;
   const guestHash = guestRoom.url().split('#')[1] ?? `/stream?hubId=${encodeURIComponent(ownerHubId)}&autoStart=false`;
   const contextCookies = await guestRoom.evaluate(() => sessionStorage.getItem('elfy_test_machine_uid') || '');
 
@@ -573,6 +590,7 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
 test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics', async ({
   browser,
 }) => {
+  test.setTimeout(45_000);
   const context = await createTrackedContext(browser);
   const ownerUid = createRunUid('t11-owner');
 
@@ -632,4 +650,61 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
   await ownerRoom.getByTestId('retry-connection-btn').click();
   await expect(ownerRoom.getByTestId('connection-failure-alert')).toBeHidden();
   await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
+
+  // Verify SDP handshake failure diagnostic when a guest is accepted without receiving a host offer
+  const guestUid = createRunUid('t11-guest');
+  const guestPage = await initPeerPage(context, guestUid);
+  await openHomeAndSetConsent(guestPage, 'decline');
+  const guestHubCode = await readMyHubCode(guestPage);
+  const guestPeerSafe = guestHubCode.replace(/^elfy\/hub\//, '').replace('#', '_');
+  const phantomHub = 'elfy/hub/PhantomHost_9999';
+  const phantomRoom = await knockGuestIntoHub(guestPage, phantomHub);
+
+  await guestPage.evaluate(
+    ({ hubId, peerSafe }) => {
+      const channel = new BroadcastChannel('elfy-signaling-channel');
+      channel.postMessage({
+        topic: `${hubId}/peer/${peerSafe}/knock`,
+        envelope: {
+          version: 1,
+          messageId: `msg_accept_${Date.now()}`,
+          hubId,
+          senderPeerIdSafe: 'PhantomHost_9999',
+          sentAt: Date.now(),
+          payload: {
+            type: 'knock_decision',
+            accepted: true,
+            sessionToken: `sess_phantom_${Date.now()}`,
+            hostPeerIdSafe: 'PhantomHost_9999',
+            hostDisplayName: 'PhantomHost',
+            peerRoster: [
+              {
+                peerIdSafe: 'PhantomHost_9999',
+                peerTag: 'PhantomHost#9999',
+                displayName: 'PhantomHost',
+                avatarUrl: '',
+                role: 'owner',
+                isStreaming: true,
+                joinedAt: Date.now(),
+              },
+            ],
+          },
+        },
+      });
+      channel.close();
+    },
+    { hubId: phantomHub, peerSafe: guestPeerSafe }
+  );
+
+  await expect(phantomRoom.getByTestId('multi-stream-hub')).toBeVisible();
+  await expect(phantomRoom.getByTestId('connection-failure-alert')).toBeVisible({ timeout: 12_000 });
+  await expect(phantomRoom.getByTestId('connection-failure-stage')).toHaveText(
+    'Offer / Answer Handshake'
+  );
+  await expect(phantomRoom.getByTestId('connection-failure-reason')).toContainText(
+    'did not receive the WebRTC stream offer from host'
+  );
+  await expect(phantomRoom.getByTestId('connection-failure-details')).toContainText(
+    'host=PhantomHost_9999'
+  );
 });

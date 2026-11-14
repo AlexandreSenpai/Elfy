@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import styles from './StreamViewerPage.module.css';
 import { ChooseNickname } from '../../components/ChooseNickname/ChooseNickname';
+import { ConnectionFailureBanner } from '../../components/ConnectionFailureBanner/ConnectionFailureBanner';
 import { GuestKnockGate } from '../../components/GuestKnockGate/GuestKnockGate';
 import { Header } from '../../components/Header/Header';
 import { HostKnockAlert } from '../../components/HostKnockAlert/HostKnockAlert';
@@ -73,7 +74,8 @@ export const StreamViewerPage: React.FC = () => {
         targetNormalized.length > 0 &&
         targetNormalized === currentNormalized &&
         (sessionActionsRef.current.role === 'owner' ||
-          sessionActionsRef.current.entranceAccepted);
+          sessionActionsRef.current.entranceAccepted ||
+          sessionActionsRef.current.knockStatus === 'knocking');
 
       if (isSameActiveHub) {
         if (sessionActionsRef.current.isMinimized) {
@@ -85,7 +87,8 @@ export const StreamViewerPage: React.FC = () => {
         return;
       }
 
-      setOverrideHubSlug(targetHub);
+      const urlNormalized = normalizeHubTopic(sessionActionsRef.current.urlHubId);
+      setOverrideHubSlug(targetNormalized && targetNormalized === urlNormalized ? null : targetHub);
       setOverrideAutoStart(Boolean(event.payload.autoStart));
       setOverrideJoinedAs(event.payload.joinedAs ?? null);
       sessionActionsRef.current.rejoinRoom();
@@ -168,8 +171,10 @@ export const StreamViewerPage: React.FC = () => {
   });
 
   const sessionActionsRef = useRef({
+    urlHubId,
     hubId: session.hubId,
     role: session.role,
+    knockStatus: session.knockStatus,
     entranceAccepted: session.entranceAccepted,
     isSharing: session.isSharing,
     hasLeftRoom: session.hasLeftRoom,
@@ -179,8 +184,10 @@ export const StreamViewerPage: React.FC = () => {
     startSharing: session.startSharing,
   });
   sessionActionsRef.current = {
+    urlHubId,
     hubId: session.hubId,
     role: session.role,
+    knockStatus: session.knockStatus,
     entranceAccepted: session.entranceAccepted,
     isSharing: session.isSharing,
     hasLeftRoom: session.hasLeftRoom,
@@ -364,6 +371,13 @@ export const StreamViewerPage: React.FC = () => {
     );
   };
 
+  const isMultiStreamRendered =
+    !isProfileLoading &&
+    Boolean(activeHubSlug) &&
+    !session.hasLeftRoom &&
+    !(session.role === 'guest' && !session.entranceAccepted) &&
+    !session.isMinimized;
+
   return (
     <div className={styles.streamContainer}>
       <Header
@@ -383,6 +397,16 @@ export const StreamViewerPage: React.FC = () => {
           onAccept={session.acceptKnock}
           onReject={session.rejectKnock}
         />
+      )}
+
+      {session.connectionFailure && !isMultiStreamRendered && (
+        <div className={styles.pageAlertSlot}>
+          <ConnectionFailureBanner
+            failure={session.connectionFailure}
+            onRetry={session.retryConnection}
+            onDismiss={session.dismissConnectionFailure}
+          />
+        </div>
       )}
 
       {renderMainContent()}

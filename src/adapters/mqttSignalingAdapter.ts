@@ -10,8 +10,7 @@ import {
 
 const MAX_SEEN_IDS = 500;
 const MAX_PENDING_PUBLISHES = 100;
-const SUBACK_TIMEOUT_MS = 600;
-const UNSUBSCRIBE_GRACE_MS = 2500;
+const SUBACK_TIMEOUT_MS = 2500;
 
 interface PendingPublish {
   topic: string;
@@ -48,7 +47,6 @@ export class MqttSignalingAdapter implements ISignalingTransport {
   private broadcastChannel: BroadcastChannel | null = null;
   private topicHandlers = new Map<string, Set<TopicMessageHandler>>();
   private subscribedOnBroker = new Set<string>();
-  private pendingUnsubscribes = new Map<string, number>();
   private connectionListeners = new Set<ConnectionStateListener>();
   private seenQueue: string[] = [];
   private seenSet = new Set<string>();
@@ -104,13 +102,6 @@ export class MqttSignalingAdapter implements ISignalingTransport {
     for (const listener of Array.from(this.connectionListeners)) {
       listener(connected);
     }
-  }
-
-  private clearPendingUnsubscribe(topic: string): void {
-    const timer = this.pendingUnsubscribes.get(topic);
-    if (timer === undefined) return;
-    window.clearTimeout(timer);
-    this.pendingUnsubscribes.delete(topic);
   }
 
   private subscribeOnBroker(client: MqttClient, topic: string): Promise<void> {
@@ -211,7 +202,6 @@ export class MqttSignalingAdapter implements ISignalingTransport {
 
     this.ensureBroadcastChannel();
     void this.connect();
-    this.clearPendingUnsubscribe(topic);
 
     const set = this.topicHandlers.get(topic) ?? new Set<TopicMessageHandler>();
     set.add(handler);
@@ -233,26 +223,14 @@ export class MqttSignalingAdapter implements ISignalingTransport {
     set.delete(handler);
     if (set.size > 0) return;
 
+    // Keep broker subscription warm in subscribedOnBroker to avoid unsubscribe/re-subscribe races on room re-entry.
     this.topicHandlers.delete(topic);
-    this.clearPendingUnsubscribe(topic);
-
-    const timer = window.setTimeout(() => {
-      this.pendingUnsubscribes.delete(topic);
-      if (this.topicHandlers.has(topic)) return;
-      this.subscribedOnBroker.delete(topic);
-      if (this.client?.connected) {
-        this.client.unsubscribe(topic);
-      }
-    }, UNSUBSCRIBE_GRACE_MS);
-
-    this.pendingUnsubscribes.set(topic, timer);
   }
 
   async unsubscribeTopic(rawTopic: string): Promise<void> {
     const topic = normalizeMqttTopic(rawTopic);
     if (!topic) return;
 
-    this.clearPendingUnsubscribe(topic);
     this.topicHandlers.delete(topic);
     this.subscribedOnBroker.delete(topic);
     if (this.client?.connected) {

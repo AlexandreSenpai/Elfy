@@ -32,4 +32,5 @@ export const ICEServers = ICE_SERVERS;
 export const getRtcConfiguration = (): RTCConfiguration => ({
   iceServers: ICE_SERVERS,
   iceCandidatePoolSize: 4,
+  bundlePolicy: 'max-bundle',
 });

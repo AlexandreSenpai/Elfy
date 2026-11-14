@@ -335,6 +335,8 @@ export class WebRtcStreamEngine implements IStreamEngine {
     const transceivers = entry.pc.getTransceivers();
 
     for (const track of stream.getTracks()) {
+      if (track.readyState === 'ended') continue;
+
       const existingTransceiver = transceivers.find(
         (t) =>
           t.direction !== 'stopped' &&
@@ -351,20 +353,42 @@ export class WebRtcStreamEngine implements IStreamEngine {
           existingTransceiver.direction = 'sendrecv';
         }
         await existingTransceiver.sender.replaceTrack(track);
-        await updateSenderMaxFramerate(existingTransceiver.sender, this.currentFps);
         continue;
       }
 
       const existingSender = entry.pc.getSenders().find((s) => s.track?.kind === track.kind);
       if (existingSender) {
         await existingSender.replaceTrack(track);
-        await updateSenderMaxFramerate(existingSender, this.currentFps);
         continue;
       }
 
-      const added = entry.pc.addTrack(track, stream);
-      await updateSenderMaxFramerate(added, this.currentFps);
+      if (entry.pc.signalingState === 'have-remote-offer') {
+        continue;
+      }
+
+      entry.pc.addTrack(track, stream);
     }
+  }
+
+  private async applyFramerateToPeerSenders(entry: PeerEntry): Promise<void> {
+    if (entry.pc.connectionState === 'closed') return;
+    for (const sender of entry.pc.getSenders()) {
+      await updateSenderMaxFramerate(sender, this.currentFps);
+    }
+  }
+
+  private syncPeerWithLocalStream(entry: PeerEntry): void {
+    const stream = this.localStream;
+    if (!stream || entry.pc.connectionState === 'closed') return;
+    if (!stream.getTracks().some((t) => t.readyState === 'live')) return;
+
+    void this.enqueuePeerTask(entry, async () => {
+      const liveStream = this.localStream;
+      if (!liveStream || entry.pc.connectionState === 'closed') return;
+      if (!liveStream.getTracks().some((t) => t.readyState === 'live')) return;
+      await this.attachLocalTracksToPeer(entry, liveStream);
+      void this.renegotiatePeer(entry.peerIdSafe);
+    });
   }
 
   private async replaceVideoTrackOnStreamAndPeers(
@@ -465,9 +489,8 @@ export class WebRtcStreamEngine implements IStreamEngine {
       entry.offerTimeoutTimer = null;
       if (this.peers.get(entry.peerIdSafe) !== entry) return;
       if (entry.pc.connectionState === 'closed' || entry.initialHandshakeDone) return;
-      if (entry.pc.signalingState !== 'have-local-offer') return;
 
-      if (entry.pc.localDescription) {
+      if (entry.pc.signalingState === 'have-local-offer' && entry.pc.localDescription) {
         void this.callbacks.onSignalOffer?.(
           entry.peerIdSafe,
           entry.pc.localDescription.toJSON(),
@@ -479,15 +502,19 @@ export class WebRtcStreamEngine implements IStreamEngine {
         entry.offerTimeoutTimer = null;
         if (this.peers.get(entry.peerIdSafe) !== entry) return;
         if (entry.pc.connectionState === 'closed' || entry.initialHandshakeDone) return;
-        if (entry.pc.signalingState !== 'have-local-offer') return;
 
-        this.callbacks.onPeerConnectionError?.({
-          stage: 'sdp_handshake',
-          reason: 'Peer did not answer the WebRTC offer in time (SDP handshake timed out).',
-          details: `peer=${entry.peerIdSafe}, signalingState=${entry.pc.signalingState}, iceGatheringState=${entry.pc.iceGatheringState}`,
-          peerIdSafe: entry.peerIdSafe,
-          timestamp: Date.now(),
-        });
+        if (entry.pc.signalingState === 'have-local-offer') {
+          this.callbacks.onPeerConnectionError?.({
+            stage: 'sdp_handshake',
+            reason: 'Peer did not answer the WebRTC offer in time (SDP handshake timed out).',
+            details: `peer=${entry.peerIdSafe}, signalingState=${entry.pc.signalingState}, iceGatheringState=${entry.pc.iceGatheringState}`,
+            peerIdSafe: entry.peerIdSafe,
+            timestamp: Date.now(),
+          });
+          return;
+        }
+
+        this.callbacks.onPeerConnectionError?.(this.buildConnectionFailure(entry));
       }, 5500);
     }, 3500);
   }
@@ -550,6 +577,11 @@ export class WebRtcStreamEngine implements IStreamEngine {
 
     for (const sender of entry.pc.getSenders()) {
       try {
+        void sender.replaceTrack(null).catch(() => {});
+      } catch {
+        // Ignore errors detaching track before closing sender.
+      }
+      try {
         entry.pc.removeTrack(sender);
       } catch {
         // Ignore errors removing senders on an already closing RTCPeerConnection.
@@ -577,9 +609,9 @@ export class WebRtcStreamEngine implements IStreamEngine {
   }
 
   private isDataChannelTransportHealthy(entry: PeerEntry): boolean {
-    if (!entry.initialHandshakeDone || entry.dataChannel?.readyState !== 'open') return false;
+    if (entry.dataChannel?.readyState !== 'open') return false;
     const ice = entry.pc.iceConnectionState;
-    return ice === 'connected' || ice === 'completed';
+    return ice !== 'failed' && ice !== 'closed';
   }
 
   private getOrCreatePeerEntry(remotePeerIdSafe: string, sessionToken: string): PeerEntry {
@@ -760,19 +792,19 @@ export class WebRtcStreamEngine implements IStreamEngine {
     const state = entry.pc.connectionState;
     this.callbacks.onPeerConnectionStateChange?.(entry.peerIdSafe, state);
 
+    if (state === 'failed') {
+      this.callbacks.onPeerConnectionError?.(this.buildConnectionFailure(entry));
+    }
+
     const shouldEvict = state === 'closed' || (state === 'failed' && entry.iceRestartCount >= 2);
     if (!shouldEvict) return;
 
-    const failure = state === 'failed' ? this.buildConnectionFailure(entry) : null;
     entry.remoteStream = null;
     if (this.peers.get(entry.peerIdSafe) === entry) {
       this.peers.delete(entry.peerIdSafe);
       this.detachAndClosePeerEntry(entry);
     }
     this.callbacks.onRemoteStreamRemoved?.(entry.peerIdSafe);
-    if (failure) {
-      this.callbacks.onPeerConnectionError?.(failure);
-    }
   }
 
   private attachDataChannel(entry: PeerEntry, channel: RTCDataChannel): void {
@@ -784,6 +816,9 @@ export class WebRtcStreamEngine implements IStreamEngine {
       this.touchPeerActivity(entry);
       this.clearOfferTimeoutTimer(entry);
       this.callbacks.onDataChannelOpen?.(entry.peerIdSafe);
+      if (this.localStream) {
+        this.syncPeerWithLocalStream(entry);
+      }
     };
 
     channel.onmessage = (event: MessageEvent) => {
@@ -799,6 +834,8 @@ export class WebRtcStreamEngine implements IStreamEngine {
     const envelope = parseDataChannelMessage(rawData);
     if (!envelope) return;
     if (envelope.sessionToken !== entry.sessionToken) return;
+    entry.initialHandshakeDone = true;
+    this.clearOfferTimeoutTimer(entry);
     this.touchPeerActivity(entry);
 
     const handler = this.dcDispatch[envelope.payload.type];
@@ -822,6 +859,21 @@ export class WebRtcStreamEngine implements IStreamEngine {
       { type: 'pong', echoSentAt: envelope.payload.sentAt, respondedAt: Date.now() },
       entry.sessionToken
     );
+
+    if (
+      this.localStream &&
+      entry.initialHandshakeDone &&
+      !entry.makingOffer &&
+      entry.pc.signalingState === 'stable'
+    ) {
+      const hasLiveVideoSender = entry.pc
+        .getSenders()
+        .some((s) => s.track?.kind === 'video' && s.track.readyState === 'live');
+      if (!hasLiveVideoSender) {
+        this.syncPeerWithLocalStream(entry);
+      }
+    }
+
     this.callbacks.onDataChannelMessage?.(entry.peerIdSafe, envelope);
   }
 
@@ -867,15 +919,12 @@ export class WebRtcStreamEngine implements IStreamEngine {
         this.attachDataChannel(entry, dc);
       }
 
-      if (this.localStream) {
-        await this.attachLocalTracksToPeer(entry, this.localStream);
-      }
-
       entry.makingOffer = true;
       entry.canEmitIce = false;
       try {
         const offer = await entry.pc.createOffer();
         await entry.pc.setLocalDescription(offer);
+        await this.applyFramerateToPeerSenders(entry);
         if (entry.pc.localDescription) {
           await this.callbacks.onSignalOffer?.(
             remotePeerIdSafe,
@@ -927,6 +976,7 @@ export class WebRtcStreamEngine implements IStreamEngine {
       try {
         const answer = await entry.pc.createAnswer();
         await entry.pc.setLocalDescription(answer);
+        await this.applyFramerateToPeerSenders(entry);
         if (entry.pc.localDescription) {
           await this.callbacks.onSignalAnswer?.(
             remotePeerIdSafe,
@@ -936,7 +986,9 @@ export class WebRtcStreamEngine implements IStreamEngine {
         }
         entry.canEmitIce = true;
         this.flushPendingLocalIce(entry);
-        this.scheduleOfferTimeout(entry);
+        if (!entry.initialHandshakeDone) {
+          this.scheduleOfferTimeout(entry);
+        }
       } finally {
         entry.canEmitIce = true;
         if (entry.pc.localDescription) {
@@ -1076,6 +1128,7 @@ export class WebRtcStreamEngine implements IStreamEngine {
       try {
         const answer = await entry.pc.createAnswer();
         await entry.pc.setLocalDescription(answer);
+        await this.applyFramerateToPeerSenders(entry);
         if (entry.pc.localDescription) {
           const sdp = entry.pc.localDescription.toJSON();
           const sentOverDc =
@@ -1096,7 +1149,6 @@ export class WebRtcStreamEngine implements IStreamEngine {
         }
         entry.canEmitIce = true;
         this.flushPendingLocalIce(entry);
-        this.scheduleOfferTimeout(entry);
       } finally {
         entry.canEmitIce = true;
         if (entry.pc.localDescription) {
@@ -1118,6 +1170,8 @@ export class WebRtcStreamEngine implements IStreamEngine {
     return this.enqueuePeerTask(entry, async () => {
       if (entry.pc.signalingState !== 'have-local-offer') return;
 
+      this.touchPeerActivity(entry);
+      this.clearOfferTimeoutTimer(entry);
       await entry.pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
       await this.flushPendingIce(entry);
     });
@@ -1159,6 +1213,7 @@ export class WebRtcStreamEngine implements IStreamEngine {
       try {
         const offer = await entry.pc.createOffer();
         await entry.pc.setLocalDescription(offer);
+        await this.applyFramerateToPeerSenders(entry);
         if (entry.pc.localDescription) {
           const sdp = entry.pc.localDescription.toJSON();
           const sentOverDc =
@@ -1211,18 +1266,36 @@ export class WebRtcStreamEngine implements IStreamEngine {
     return true;
   }
 
+  isPeerConnected(peerIdSafe: string): boolean {
+    const entry = this.peers.get(peerIdSafe);
+    if (!entry) return false;
+    if (!entry.initialHandshakeDone || entry.dataChannel?.readyState !== 'open') {
+      return false;
+    }
+    return this.isPeerHealthy(peerIdSafe);
+  }
+
   pingAndCleanupPeers(): string[] {
     const now = Date.now();
     const evicted: string[] = [];
 
     for (const [peerIdSafe, entry] of Array.from(this.peers.entries())) {
       if (!this.isPeerHealthy(peerIdSafe)) {
+        this.callbacks.onPeerConnectionError?.(this.buildConnectionFailure(entry));
+        const isIceRestarting =
+          (entry.pc.iceConnectionState === 'failed' || entry.pc.connectionState === 'failed') &&
+          entry.iceRestartCount < 2 &&
+          now - entry.createdAt <= 12000;
+        if (isIceRestarting) {
+          continue;
+        }
         this.closePeer(peerIdSafe);
         evicted.push(peerIdSafe);
         continue;
       }
 
       if (!entry.initialHandshakeDone && now - entry.createdAt > 12000) {
+        this.callbacks.onPeerConnectionError?.(this.buildConnectionFailure(entry));
         this.closePeer(peerIdSafe);
         evicted.push(peerIdSafe);
         continue;
@@ -1235,6 +1308,13 @@ export class WebRtcStreamEngine implements IStreamEngine {
       if (now - entry.lastSeenAt > 4500) {
         entry.missedPingCount += 1;
         if (entry.missedPingCount >= 3) {
+          this.callbacks.onPeerConnectionError?.({
+            stage: 'peer_disconnected',
+            reason: 'Peer stopped responding to keepalive pings (connection timed out).',
+            details: `peer=${peerIdSafe}, missedPings=${entry.missedPingCount}`,
+            peerIdSafe,
+            timestamp: now,
+          });
           this.closePeer(peerIdSafe);
           evicted.push(peerIdSafe);
           continue;

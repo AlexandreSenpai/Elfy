@@ -122,10 +122,16 @@ fn restore_stream_window(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn close_stream_window(app: tauri::AppHandle) -> Result<(), String> {
-    let Some(window) = app.get_webview_window("stream") else {
-        return Ok(());
-    };
-    let _ = window.hide();
+    if let Some(window) = app.get_webview_window("stream") {
+        let _ = window.hide();
+    }
+    if let Some(main_win) = app.get_webview_window("main") {
+        if !main_win.is_visible().unwrap_or(false) {
+            let _ = main_win.as_ref().window().move_window(Position::TrayCenter);
+            let _ = main_win.show();
+            let _ = main_win.set_focus();
+        }
+    }
     Ok(())
 }
 
@@ -259,6 +265,19 @@ fn configure_register_window(app: &tauri::App) {
     });
 }
 
+fn configure_stream_window(app: &tauri::App) {
+    let Some(stream_win) = app.get_webview_window("stream") else {
+        return;
+    };
+    let stream_w = stream_win.clone();
+    stream_win.on_window_event(move |event| {
+        if let WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = stream_w.hide();
+        }
+    });
+}
+
 fn toggle_main_window_visibility(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -357,6 +376,7 @@ pub fn run() {
             system_monitor::init_monitor();
             configure_main_window(app).map_err(Box::<dyn std::error::Error>::from)?;
             configure_register_window(app);
+            configure_stream_window(app);
             setup_tray(app)?;
             Ok(())
         })

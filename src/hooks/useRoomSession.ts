@@ -225,7 +225,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
   const [hasLeftRoom, setHasLeftRoom] = useState<boolean>(false);
   const [sessionNonce, setSessionNonce] = useState<number>(0);
   const [knockStatus, setKnockStatus] = useState<KnockStatus>(
-    resolvedRole === 'owner' ? 'accepted' : 'idle'
+    resolvedRole === 'owner' ? 'accepted' : 'knocking'
   );
   const [knockError, setKnockError] = useState<string | null>(null);
   const [entranceAccepted, setEntranceAccepted] = useState<boolean>(resolvedRole === 'owner');
@@ -736,11 +736,17 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     }
 
     broadcastRoomDataChannel({ type: 'peer_left', peerIdSafe: localPeerIdRef.current });
-    for (const peerId of notifyTargets) {
-      void publishSignalToPeer(peerId, {
+    const peerLeftPublishes = Array.from(notifyTargets).map((peerId) =>
+      publishSignalToPeer(peerId, {
         type: 'peer_left',
         peerIdSafe: localPeerIdRef.current,
-      });
+      })
+    );
+    if (peerLeftPublishes.length > 0) {
+      await Promise.race([
+        Promise.allSettled(peerLeftPublishes),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 400)),
+      ]);
     }
 
     await stopSharing();
@@ -761,7 +767,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     setHasLeftRoom(false);
     setKnockError(null);
     setConnectionFailure(null);
-    setKnockStatus(roleRef.current === 'owner' ? 'accepted' : 'idle');
+    setKnockStatus(roleRef.current === 'owner' ? 'accepted' : 'knocking');
     setEntranceAccepted(roleRef.current === 'owner');
     setSessionNonce((n) => n + 1);
   }, [resetRoomSessionState]);
@@ -1010,12 +1016,9 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       }
       const { fromPeerIdSafe, sdp, sessionToken } = envelope.payload;
       if (!verifyAndRegisterOfferToken(fromPeerIdSafe, sessionToken)) return;
-      if (fromPeerIdSafe === hostPeerIdRef.current) {
-        clearHostOfferTimer();
-      }
       return webrtcStreamEngine.handleIncomingOffer(fromPeerIdSafe, sdp, sessionToken);
     },
-    [bufferPreAcceptSignal, clearHostOfferTimer, verifyAndRegisterOfferToken]
+    [bufferPreAcceptSignal, verifyAndRegisterOfferToken]
   );
 
   const processIceEnvelope = useCallback(
@@ -1080,18 +1083,19 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
         await processIceEnvelope(sig);
       }
 
-      const receivedHostOffer = bufferedOffers.some(
-        (sig) => sig.payload.type === 'webrtc_offer' && sig.payload.fromPeerIdSafe === payload.hostPeerIdSafe
-      );
-      if (!receivedHostOffer) {
+      if (!webrtcStreamEngine.isPeerConnected(payload.hostPeerIdSafe)) {
         hostOfferTimerRef.current = window.setTimeout(() => {
           hostOfferTimerRef.current = null;
-          if (!mountedRef.current) return;
-          if (webrtcStreamEngine.getConnectedPeerIds().includes(payload.hostPeerIdSafe)) return;
+          if (!mountedRef.current || !entranceAcceptedRef.current) return;
+          if (webrtcStreamEngine.isPeerConnected(payload.hostPeerIdSafe)) return;
+
+          const hasPeer = webrtcStreamEngine.hasPeer(payload.hostPeerIdSafe);
           setConnectionFailure({
-            stage: 'sdp_handshake',
-            reason: 'Accepted by host, but did not receive the WebRTC stream offer from host.',
-            details: `host=${payload.hostPeerIdSafe}, hub=${hubRef.current}`,
+            stage: hasPeer ? 'ice_negotiation' : 'sdp_handshake',
+            reason: hasPeer
+              ? 'Received host offer, but P2P DataChannel / ICE failed to establish within 8s.'
+              : 'Accepted by host, but did not receive the WebRTC stream offer from host.',
+            details: `host=${payload.hostPeerIdSafe}, hub=${hubRef.current}, hasPeer=${hasPeer}, connectedPeers=${webrtcStreamEngine.getConnectedPeerIds().join(',') || 'none'}`,
             peerIdSafe: payload.hostPeerIdSafe,
             timestamp: Date.now(),
           });
@@ -1287,6 +1291,39 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     [broadcastRoomDataChannel, rebuildStreams, updatePeersList]
   );
 
+  const evictStalePeerWithoutLeavingRoom = useCallback(
+    (stalePeerId: string): void => {
+      if (!stalePeerId || stalePeerId === localPeerIdRef.current) return;
+
+      remoteStreamsRef.current.delete(stalePeerId);
+      remoteMetaRef.current.delete(stalePeerId);
+      peerTokensRef.current.delete(stalePeerId);
+      webrtcStreamEngine.closePeer(stalePeerId);
+
+      const nextRoster = updatePeersList((prev) =>
+        prev.filter((item) => item.peerIdSafe !== stalePeerId)
+      );
+      if (roleRef.current === 'owner') {
+        broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
+      }
+      rebuildStreams();
+
+      if (roleRef.current === 'guest' && stalePeerId === hostPeerIdRef.current && mountedRef.current) {
+        setConnectionFailure(
+          (prev) =>
+            prev ?? {
+              stage: 'peer_disconnected',
+              reason: 'Lost connection to the host stream session.',
+              details: `host=${stalePeerId}, hub=${hubRef.current}`,
+              peerIdSafe: stalePeerId,
+              timestamp: Date.now(),
+            }
+        );
+      }
+    },
+    [broadcastRoomDataChannel, rebuildStreams, updatePeersList]
+  );
+
   const handleDataChannelOpenCallback = useCallback(
     (peerIdSafe: string): void => {
       const token =
@@ -1417,11 +1454,13 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     const dcHandlers = createDcDispatchMap();
     const callbacks: StreamEngineCallbacks = {
       onRemoteStream: (peerIdSafe, stream) => {
-        if (peerIdSafe === hostPeerIdRef.current) {
-          clearHostOfferTimer();
-        }
-        if (mountedRef.current) {
-          setConnectionFailure(null);
+        if (webrtcStreamEngine.isPeerConnected(peerIdSafe)) {
+          if (peerIdSafe === hostPeerIdRef.current) {
+            clearHostOfferTimer();
+          }
+          if (mountedRef.current) {
+            setConnectionFailure(null);
+          }
         }
         remoteStreamsRef.current.set(peerIdSafe, stream);
         setPeerStreamingFlag(peerIdSafe, true);
@@ -1662,7 +1701,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       .map((peer) => peer.peerIdSafe);
 
     for (const stalePeerId of new Set([...evictedPeers, ...orphanedPeers])) {
-      handlePeerLeftDataChannel(stalePeerId);
+      evictStalePeerWithoutLeavingRoom(stalePeerId);
     }
 
     const sampled = await systemMonitorAdapter.sampleMetrics(webrtcStreamEngine);
@@ -1695,7 +1734,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
         ? 'High CPU/GPU load detected — consider switching to 30 FPS.'
         : 'High CPU/GPU load detected.';
     setHighLoadSuggestion(advice);
-  }, [handlePeerLeftDataChannel]);
+  }, [evictStalePeerWithoutLeavingRoom]);
 
   // Periodic system CPU/RAM + WebRTC FPS/RTT monitoring and high-load warnings.
   useEffect(() => {
