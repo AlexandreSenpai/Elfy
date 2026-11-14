@@ -277,6 +277,13 @@ export const getSystemMetricsTauri = (): Promise<HostResourceMetricsDto | null> 
   return safeInvoke<HostResourceMetricsDto>('get_system_metrics');
 };
 
+export const showKnockNotificationTauri = async (
+  displayName: string,
+  peerTag: string
+): Promise<void> => {
+  await safeInvoke('show_knock_notification', { displayName, peerTag });
+};
+
 export const quitAppTauri = async (): Promise<void> => {
   await safeInvoke('quit_app');
 };

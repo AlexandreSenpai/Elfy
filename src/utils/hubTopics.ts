@@ -1,40 +1,53 @@
 import { UserProfile } from '../domain/dtos';
 
+const sanitizeToken = (raw: string): string => {
+  return (raw || '').trim().replace(/^#/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+};
+
 /**
- * Converts a nickname and peerTag into a safe MQTT topic segment.
- * E.g., nickname="Luna", peerTag="#eGkjL" -> "Luna_eGkjL"
+ * Converts a user's fixed peerTag into a safe MQTT/WebRTC peer identifier.
+ * Intentionally ignores the mutable nickname so changing nicknames never breaks
+ * active WebRTC streams or MQTT topic routing.
  */
 export const toSafePeerTag = (nickname: string, peerTag: string): string => {
-  const cleanNickname = (nickname || 'Guest').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-  const cleanTag = (peerTag || '').trim().replace(/^#/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  return `${cleanNickname}_${cleanTag}`;
+  const cleanTag = sanitizeToken(peerTag);
+  if (cleanTag) return cleanTag;
+  const fallback = (nickname || 'Guest').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+  return fallback || 'Guest';
 };
 
 /**
- * Formats a user's full display tag.
- * E.g., nickname="Luna", peerTag="#eGkjL" -> "Luna#eGkjL"
+ * Formats a user's exchangeable Hub/Peer identifier using ONLY their fixed low-collision ID.
+ * E.g., peerTag="#a1b2c3d4e5" -> "#a1b2c3d4e5"
  */
-export const formatFullPeerTag = (nickname: string, peerTag: string): string => {
-  const cleanTag = peerTag.startsWith('#') ? peerTag : `#${peerTag}`;
-  return `${nickname}${cleanTag}`;
+export const formatFullPeerTag = (_nickname: string, peerTag: string): string => {
+  const cleanTag = (peerTag || '').trim().replace(/^#/, '');
+  return cleanTag ? `#${cleanTag}` : '#000000';
 };
 
 /**
- * Normalizes any hub string (e.g. "Mochi#2sintd", "elfy/hub/Mochi#2sintd", "elfy/hub/Mochi_2sintd")
- * into the canonical MQTT hub topic base: "elfy/hub/Mochi_2sintd".
+ * Normalizes any hub string (e.g. "elfy/hub/#a1b2c3d4e5", "#a1b2c3d4e5", "a1b2c3d4e5",
+ * or legacy "elfy/hub/Mochi#a1b2c3d4e5") into the canonical MQTT hub topic base:
+ * "elfy/hub/a1b2c3d4e5".
  */
 export const normalizeHubTopic = (rawHub: string): string => {
   if (!rawHub || !rawHub.trim() || rawHub === 'elfy/hub/unknown') {
     return '';
   }
 
-  let cleaned = rawHub.trim().replace(/#/g, '_');
-  if (!cleaned.startsWith('elfy/hub/')) {
-    cleaned = cleaned.replace(/^\/?(elfy\/hub\/|hub\/)?/, '');
-    cleaned = `elfy/hub/${cleaned}`;
+  let slug = rawHub.trim().replace(/^\/?(elfy\/hub\/|hub\/)?/, '').replace(/\/+$/, '');
+  slug = slug.replace(/\/(knock|probe)$/i, '');
+
+  const hashIndex = slug.lastIndexOf('#');
+  if (hashIndex !== -1) {
+    const idAfterHash = sanitizeToken(slug.slice(hashIndex + 1));
+    if (idAfterHash) {
+      return `elfy/hub/${idAfterHash}`;
+    }
   }
 
-  return cleaned.replace(/\/+$/, '');
+  const cleanSlug = sanitizeToken(slug);
+  return cleanSlug ? `elfy/hub/${cleanSlug}` : '';
 };
 
 /**
@@ -64,21 +77,30 @@ export const getProbeTopic = (hubInput: string): string => {
 export const getGuestInboxTopic = (hubInput: string, guestTagSafe: string): string => {
   const normalized = normalizeHubTopic(hubInput);
   if (!normalized) return '';
-  const safeGuest = guestTagSafe.replace(/#/g, '_').trim();
+  const safeGuest = sanitizeToken(guestTagSafe);
   if (!safeGuest) return '';
   return `${normalized}/peer/${safeGuest}`;
 };
 
 /**
- * Extracts a human-friendly host display name and tag from a hub topic.
- * E.g., "elfy/hub/Mochi_2sintd" -> { displayName: "Mochi", tag: "#2sintd" }
+ * Extracts a human-friendly host display name and fixed tag from a hub topic.
  */
 export const extractHostFromHub = (hubInput: string): { displayName: string; tag: string } => {
   const normalized = normalizeHubTopic(hubInput);
+  const rawSlug = (hubInput || '').trim().replace(/^\/?(elfy\/hub\/|hub\/)?/, '');
+  const hashIdx = rawSlug.lastIndexOf('#');
+  if (hashIdx > 0) {
+    const legacyName = rawSlug.slice(0, hashIdx).trim();
+    const idPart = sanitizeToken(rawSlug.slice(hashIdx + 1));
+    if (legacyName && idPart) {
+      return { displayName: legacyName, tag: `#${idPart}` };
+    }
+  }
+
   const slug = normalized.replace(/^elfy\/hub\//, '');
   const lastUnderscore = slug.lastIndexOf('_');
 
-  if (lastUnderscore !== -1) {
+  if (lastUnderscore > 0) {
     return {
       displayName: slug.substring(0, lastUnderscore),
       tag: `#${slug.substring(lastUnderscore + 1)}`,
@@ -86,8 +108,8 @@ export const extractHostFromHub = (hubInput: string): { displayName: string; tag
   }
 
   return {
-    displayName: slug || 'Host',
-    tag: '',
+    displayName: 'Hub',
+    tag: slug ? `#${slug}` : '',
   };
 };
 

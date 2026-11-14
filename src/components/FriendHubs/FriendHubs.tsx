@@ -79,7 +79,6 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
 
   const fullTag = formatFullPeerTag(profile.nickname, profile.peerTag);
   const myHub = `elfy/hub/${fullTag}`;
-  const preferredFps = profile.preferredFps ?? 60;
   const activeHubsCount = hubs.filter((item) => item.status !== 'offline').length;
 
   const handleCopyLink = (): void => {
@@ -93,7 +92,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
     e.preventDefault();
     const sanitized = sanitizeHubCode(joinCode);
     if (!sanitized) {
-      setJoinError('Enter a valid hub code like elfy/hub/Name#tag');
+      setJoinError('Enter a valid Hub ID like elfy/hub/#a1b2c3d4e5');
       return;
     }
 
@@ -299,7 +298,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                     <span className={styles.broadcastingLabel}>My Hub</span>
                   </div>
                   <span className={styles.peerTag}>
-                    {isProfileLoading ? 'Loading...' : fullTag}
+                    {isProfileLoading ? 'Loading...' : `${profile.nickname} (${fullTag})`}
                   </span>
                 </div>
 
@@ -317,31 +316,13 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                 </button>
               </div>
 
-              <div className={styles.feedSpecsWrap}>
-                <div className={styles.feedSpecsLeft}>
-                  <div className={styles.specIconBox}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                      screen_share
-                    </span>
-                  </div>
-                  <div className={styles.specDetails}>
-                    <span className={styles.specTitle}>Permanent Watch Room</span>
-                    <div className={styles.specSub}>
-                      <span className={styles.specRose}>1080p · {preferredFps}fps</span>
-                      <span>·</span>
-                      <span>Bidirectional P2P</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
               <div className={styles.shareLinkBar}>
                 <div className={styles.shareLinkText}>
                   <span className="material-symbols-outlined" style={{ fontSize: '14px', color: 'var(--primary)', flexShrink: 0 }}>
                     link
                   </span>
                   {isProfileLoading ? (
-                    <span>Loading hub code...</span>
+                    <span>Loading hub ID...</span>
                   ) : (
                     <span className={styles.shareLinkCode} data-testid="my-hub-code">
                       {myHub}
@@ -369,9 +350,8 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                   <span className="material-symbols-outlined" style={{ fontSize: '15px', color: 'var(--primary)' }}>
                     add_circle
                   </span>
-                  <span>Join Hub by Code</span>
+                  <span>Join a Hub</span>
                 </span>
-                <span className={styles.noSignupText}>Knock Gate P2P</span>
               </div>
 
               <div className={styles.joinInputRow}>
@@ -383,7 +363,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                     className={styles.joinInput}
                     data-testid="join-hub-input"
                     type="text"
-                    placeholder="e.g. elfy/hub/Nova#123456"
+                    placeholder="e.g. elfy/hub/#a1b2c3d4e5"
                     value={joinCode}
                     onChange={(e) => {
                       setJoinError(null);
@@ -412,7 +392,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                   data-testid="refresh-hubs-btn"
                   disabled={isProbing}
                   onClick={() => void onRefreshHubs()}
-                  title="Probe saved friend hubs"
+                  title="Check friend hubs"
                   type="button"
                 >
                   <span
@@ -421,7 +401,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                   >
                     refresh
                   </span>
-                  <span>{isProbing ? 'Probing...' : 'Refresh'}</span>
+                  <span>{isProbing ? 'Checking...' : 'Refresh'}</span>
                 </button>
               </div>
 
@@ -431,7 +411,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
                     <span className="material-symbols-outlined" style={{ fontSize: '22px', color: 'var(--on-surface-muted)' }}>
                       groups
                     </span>
-                    <p>Join a friend&apos;s hub code above to save it automatically to SQLite.</p>
+                    <p>Enter a friend&apos;s Hub ID above to connect and save it to your list.</p>
                   </div>
                 ) : (
                   hubs.map(renderHubCard)
@@ -443,12 +423,8 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
 
         <footer className={styles.footer}>
           <div className={styles.footerLeft}>
-            <span>P2P Mesh Ready</span>
-            <span className={styles.footerLatency}>
-              <span className="material-symbols-outlined" style={{ fontSize: '12px' }}>
-                speed
-              </span>
-              <span>{preferredFps} FPS</span>
+            <span>
+              {hubs.length} Saved {hubs.length === 1 ? 'Hub' : 'Hubs'}
             </span>
           </div>
 
@@ -457,7 +433,7 @@ export const FriendHubs: React.FC<FriendHubsProps> = ({
               <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
                 badge
               </span>
-              <span>Persona</span>
+              <span>Profile</span>
             </button>
             {isTauri() && (
               <>

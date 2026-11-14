@@ -28,7 +28,7 @@ export interface UseProfileResult {
   updatePreferredFps: (fps: StreamFpsOption) => Promise<UserProfile>;
 }
 
-const tagGenerator = new ShortUniqueId({ length: 6 });
+const tagGenerator = new ShortUniqueId({ length: 10 });
 const profileInitCache = new Map<string, Promise<ProfileRowDto>>();
 let hasTrackedAppOpened = false;
 

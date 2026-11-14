@@ -42,7 +42,7 @@ export const TelemetryConsentModal: React.FC<TelemetryConsentModalProps> = ({
         </div>
 
         <p className={styles.description}>
-          Help Elfy keep P2P screen sharing smooth across hardware tiers. With your consent, we collect
+          Help Elfy keep screen sharing smooth across hardware tiers. With your consent, we collect
           only anonymous machine and streaming performance metrics to diagnose frame drops.
         </p>
 
@@ -50,7 +50,7 @@ export const TelemetryConsentModal: React.FC<TelemetryConsentModalProps> = ({
           <div className={styles.pillarAllowed}>
             <span className={`material-symbols-outlined ${styles.allowedIcon}`}>check_circle</span>
             <div className={styles.pillarText}>
-              <strong>Collected (if agreed):</strong> Stream FPS (30/60), P2P connection latency, and
+              <strong>Collected (if agreed):</strong> Stream FPS (30/60), connection latency, and
               anonymous CPU/RAM load tier.
             </div>
           </div>

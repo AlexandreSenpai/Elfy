@@ -44,6 +44,7 @@ import {
   normalizeHubTopic,
   toSafePeerTag,
 } from '../utils/hubTopics';
+import { playKnockSound, showKnockNotification } from '../utils/notifications';
 import {
   minimizeWindowTauri,
   restoreStreamWindowTauri,
@@ -1198,6 +1199,9 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       hubTopic: hubRef.current,
     };
 
+    playKnockSound();
+    showKnockNotification(payload.displayName, payload.peerTag);
+
     setPendingKnocks((prev) => [
       knockItem,
       ...prev.filter((item) => item.peerIdSafe !== payload.peerIdSafe),
@@ -1414,7 +1418,13 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
           displayName: p.displayName,
           avatarUrl: p.avatarUrl,
         });
-        setPeerStreamingFlag(p.peerIdSafe, true);
+        updatePeersList((prev) =>
+          prev.map((peer) =>
+            peer.peerIdSafe === p.peerIdSafe
+              ? { ...peer, displayName: p.displayName, avatarUrl: p.avatarUrl, isStreaming: true }
+              : peer
+          )
+        );
         rebuildStreams();
       },
       stream_stopped: (_peerId, env) => {
@@ -1422,6 +1432,29 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
         remoteMetaRef.current.delete(env.payload.peerIdSafe);
         remoteStreamsRef.current.delete(env.payload.peerIdSafe);
         setPeerStreamingFlag(env.payload.peerIdSafe, false);
+        rebuildStreams();
+      },
+      peer_profile_updated: (_peerId, env) => {
+        if (env.payload.type !== 'peer_profile_updated') return;
+        const p = env.payload;
+        const existingMeta = remoteMetaRef.current.get(p.peerIdSafe);
+        if (existingMeta) {
+          remoteMetaRef.current.set(p.peerIdSafe, {
+            ...existingMeta,
+            displayName: p.displayName,
+            avatarUrl: p.avatarUrl,
+          });
+        }
+        const nextRoster = updatePeersList((prev) =>
+          prev.map((peer) =>
+            peer.peerIdSafe === p.peerIdSafe
+              ? { ...peer, displayName: p.displayName, avatarUrl: p.avatarUrl }
+              : peer
+          )
+        );
+        if (roleRef.current === 'owner') {
+          broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
+        }
         rebuildStreams();
       },
       renegotiate_offer: () => {},
@@ -1442,6 +1475,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       },
     };
   }, [
+    broadcastRoomDataChannel,
     cleanupExistingPeerConnection,
     connectMeshPeersFromRoster,
     handlePeerLeftDataChannel,
@@ -1748,6 +1782,67 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       window.clearInterval(timer);
     };
   }, [hasLeftRoom, normalizedHub, sampleSystemMetricsOnce]);
+
+  // Sync live nickname / avatar changes across connected peers without tearing down the room.
+  useEffect(() => {
+    if (waitingForProfile || hasLeftRoom || !hubRef.current) return;
+    const myId = localPeerIdRef.current;
+    if (!myId) return;
+
+    const nextRoster = updatePeersList((prev) => {
+      let changed = false;
+      const mapped = prev.map((peer) => {
+        if (peer.peerIdSafe !== myId) return peer;
+        if (
+          peer.displayName === options.profile.nickname &&
+          peer.avatarUrl === options.profile.avatarUrl
+        ) {
+          return peer;
+        }
+        changed = true;
+        return {
+          ...peer,
+          displayName: options.profile.nickname,
+          avatarUrl: options.profile.avatarUrl,
+        };
+      });
+      return changed ? mapped : prev;
+    });
+
+    rebuildStreams();
+
+    if (roleRef.current === 'owner' || entranceAcceptedRef.current) {
+      broadcastRoomDataChannel({
+        type: 'peer_profile_updated',
+        peerIdSafe: myId,
+        displayName: options.profile.nickname,
+        avatarUrl: options.profile.avatarUrl,
+      });
+
+      if (isSharingRef.current) {
+        broadcastRoomDataChannel({
+          type: 'stream_started',
+          peerIdSafe: myId,
+          displayName: options.profile.nickname,
+          avatarUrl: options.profile.avatarUrl,
+          resolution: STREAM_CONFIG.DEFAULT_RESOLUTION,
+          fps: fpsRef.current,
+        });
+      }
+
+      if (roleRef.current === 'owner') {
+        broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
+      }
+    }
+  }, [
+    broadcastRoomDataChannel,
+    hasLeftRoom,
+    options.profile.avatarUrl,
+    options.profile.nickname,
+    rebuildStreams,
+    updatePeersList,
+    waitingForProfile,
+  ]);
 
   return {
     hubId: normalizedHub || options.hubId,

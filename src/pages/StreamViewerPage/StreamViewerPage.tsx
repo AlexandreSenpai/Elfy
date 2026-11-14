@@ -9,7 +9,6 @@ import { GuestKnockGate } from '../../components/GuestKnockGate/GuestKnockGate';
 import { Header } from '../../components/Header/Header';
 import { HostKnockAlert } from '../../components/HostKnockAlert/HostKnockAlert';
 import { MultiStreamHub } from '../../components/MultiStreamHub/MultiStreamHub';
-import { ELFY_MASCOT_ICON } from '../../data/mockData';
 import { RoomRole } from '../../domain/dtos';
 import { useProfile } from '../../hooks/useProfile';
 import { useRoomSession } from '../../hooks/useRoomSession';
@@ -197,6 +196,8 @@ export const StreamViewerPage: React.FC = () => {
     startSharing: session.startSharing,
   };
 
+  const closingOnLeaveRef = useRef<boolean>(false);
+
   const handleBackToFriendHubs = async (): Promise<void> => {
     if (isTauri()) {
       await closeStreamWindowTauri();
@@ -205,11 +206,24 @@ export const StreamViewerPage: React.FC = () => {
     navigate('/');
   };
 
+  useEffect(() => {
+    if (!session.hasLeftRoom) {
+      closingOnLeaveRef.current = false;
+      return;
+    }
+    if (closingOnLeaveRef.current) return;
+    closingOnLeaveRef.current = true;
+    void handleBackToFriendHubs();
+  });
+
   const handleLeaveRoom = async (): Promise<void> => {
+    closingOnLeaveRef.current = true;
     await session.leaveRoom();
+    await handleBackToFriendHubs();
   };
 
   const handleCloseWindow = async (): Promise<void> => {
+    closingOnLeaveRef.current = true;
     await session.leaveRoom();
     await handleBackToFriendHubs();
   };
@@ -234,7 +248,7 @@ export const StreamViewerPage: React.FC = () => {
         <div className={styles.streamViewArea}>
           <div className={styles.statusBox}>
             <h3>Loading Watch Room...</h3>
-            <p>Preparing your machine-locked persona and P2P session.</p>
+            <p>Preparing your Hub session...</p>
           </div>
         </div>
       );
@@ -245,7 +259,7 @@ export const StreamViewerPage: React.FC = () => {
         <div className={styles.streamViewArea}>
           <div className={styles.statusBox}>
             <h3>No Hub Selected</h3>
-            <p>Pick a Friend Hub or enter a hub code to join or host a watch room.</p>
+            <p>Pick a Friend Hub or enter a Hub ID to join or open a watch room.</p>
             <button
               className={styles.primaryActionBtn}
               onClick={() => void handleBackToFriendHubs()}
@@ -259,29 +273,7 @@ export const StreamViewerPage: React.FC = () => {
     }
 
     if (session.hasLeftRoom) {
-      return (
-        <div className={styles.streamViewArea}>
-          <div className={styles.leftHubCard}>
-            <div className={styles.leftHubMascotWrap}>
-              <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" className={styles.leftHubMascotImg} />
-            </div>
-            <h3>You left {session.hubId}</h3>
-            <p>Your screen share and peer connections have been closed cleanly.</p>
-            <div className={styles.leftHubActions}>
-              <button className={styles.primaryActionBtn} onClick={session.rejoinRoom} type="button">
-                Re-join Hub
-              </button>
-              <button
-                className={styles.secondaryActionBtn}
-                onClick={() => void handleBackToFriendHubs()}
-                type="button"
-              >
-                Friend Hubs
-              </button>
-            </div>
-          </div>
-        </div>
-      );
+      return null;
     }
 
     if (session.role === 'guest' && !session.entranceAccepted) {

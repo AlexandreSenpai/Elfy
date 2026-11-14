@@ -324,6 +324,83 @@ fn acquire_single_instance_lock() -> bool {
     true
 }
 
+#[cfg(target_os = "windows")]
+fn spawn_windows_toast_notification(title: String, body: String) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+    std::thread::spawn(move || {
+        let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$title = $env:ELFY_NOTIFY_TITLE
+$body = $env:ELFY_NOTIFY_BODY
+if ([string]::IsNullOrWhiteSpace($title)) { $title = 'Elfy' }
+$shown = $false
+try {
+  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+  [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+  $escapedTitle = [System.Security.SecurityElement]::Escape($title)
+  $escapedBody = [System.Security.SecurityElement]::Escape($body)
+  $xmlStr = "<toast><visual><binding template='ToastGeneric'><text>$escapedTitle</text><text>$escapedBody</text></binding></visual><audio silent='true'/></toast>"
+  $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+  $xml.LoadXml($xmlStr)
+  $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Elfy').Show($toast)
+  $shown = $true
+} catch {
+  $shown = $false
+}
+if (-not $shown) {
+  Add-Type -AssemblyName System.Windows.Forms
+  $notify = New-Object System.Windows.Forms.NotifyIcon
+  $notify.Icon = [System.Drawing.SystemIcons]::Information
+  $notify.Visible = $true
+  $notify.ShowBalloonTip(5000, $title, $body, [System.Windows.Forms.ToolTipIcon]::Info)
+  Start-Sleep -Milliseconds 5200
+  $notify.Dispose()
+}
+"#;
+
+        let _ = std::process::Command::new("powershell")
+            .creation_flags(CREATE_NO_WINDOW)
+            .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script])
+            .env("ELFY_NOTIFY_TITLE", title)
+            .env("ELFY_NOTIFY_BODY", body)
+            .output();
+    });
+}
+
+#[tauri::command]
+fn show_knock_notification(
+    app: tauri::AppHandle,
+    display_name: String,
+    peer_tag: String,
+) -> Result<(), String> {
+    let clean_name = display_name.trim();
+    let clean_tag = peer_tag.trim();
+    let caller = if clean_name.is_empty() { "Someone" } else { clean_name };
+    let title = "Elfy — Knock Request".to_string();
+    let body = if clean_tag.is_empty() {
+        format!("{caller} wants to join your Hub")
+    } else {
+        format!("{caller} ({clean_tag}) wants to join your Hub")
+    };
+
+    if let Some(stream_win) = app.get_webview_window("stream") {
+        let _ = stream_win.request_user_attention(Some(tauri::UserAttentionType::Informational));
+    } else if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.request_user_attention(Some(tauri::UserAttentionType::Informational));
+    }
+
+    #[cfg(target_os = "windows")]
+    spawn_windows_toast_notification(title, body);
+
+    #[cfg(not(target_os = "windows"))]
+    let _ = (title, body);
+
+    Ok(())
+}
+
 #[tauri::command]
 fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
@@ -393,6 +470,7 @@ pub fn run() {
             toggle_fullscreen,
             set_fullscreen,
             is_fullscreen,
+            show_knock_notification,
             quit_app,
             db::db_get_or_init_profile,
             db::db_update_profile,

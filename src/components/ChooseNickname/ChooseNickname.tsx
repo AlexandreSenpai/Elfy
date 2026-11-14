@@ -114,8 +114,8 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
   };
 
   const handleCopyId = (): void => {
-    const fullId = `${nickname.trim() || 'Companion'}#${lockedTag}`;
-    navigator.clipboard?.writeText(fullId).catch(() => {});
+    const hubId = `elfy/hub/#${lockedTag}`;
+    navigator.clipboard?.writeText(hubId).catch(() => {});
   };
 
   const handleClose = async (): Promise<void> => {
@@ -159,7 +159,7 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
       await onCompleteRegistration?.(saved);
     } catch {
       setIsSuccess(false);
-      setErrorMessage('Failed to save persona to local SQLite database.');
+      setErrorMessage('Could not save your profile changes.');
     } finally {
       setIsSubmitting(false);
     }
@@ -175,7 +175,6 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
   };
 
   const submitState = getSubmitLabel(isSubmitting, isSuccess, isExistingUser);
-  const displayNickname = nickname.trim() || 'Companion';
 
   return (
     <div className={styles.wrapper}>
@@ -186,7 +185,7 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
               <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" />
             </div>
             <span className={`material-symbols-outlined ${styles.boltIcon}`}>bolt</span>
-            <span>Elfy • {isExistingUser ? 'Edit Persona' : 'Setup'}</span>
+            <span>Elfy • {isExistingUser ? 'Edit Profile' : 'Setup'}</span>
           </div>
 
           <button
@@ -214,14 +213,9 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
                 <div className={styles.cardHeaderTitles}>
                   <span className={styles.cardTitle}>Elfy</span>
                   <span className={styles.cardSubtitle}>
-                    {isExistingUser ? 'Persona & Privacy' : 'Local Mesh Setup'}
+                    {isExistingUser ? 'Profile & Privacy' : 'Profile Setup'}
                   </span>
                 </div>
-              </div>
-
-              <div className={styles.discoveryBadge}>
-                <span className={styles.discoveryDot} />
-                <span>MACHINE LOCKED</span>
               </div>
             </div>
 
@@ -229,12 +223,12 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
               <h1 className={styles.welcomeHeading}>
                 {isExistingUser ? 'Update your ' : 'Welcome to '}
                 <span className={styles.welcomeAccent}>
-                  {isExistingUser ? 'Persona' : 'Elfy'}
+                  {isExistingUser ? 'Profile' : 'Elfy'}
                 </span>
               </h1>
               <p className={styles.welcomeDesc}>
-                Update your nickname and avatar anytime. Your peer tag is permanently locked to
-                this machine and backed by local SQLite storage.
+                Update your nickname and avatar anytime. Your Hub ID stays fixed so friends can
+                always find you.
               </p>
             </div>
 
@@ -303,7 +297,7 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
                   <span
                     className={styles.tagSuffix}
                     data-testid="locked-peer-tag"
-                    title="Peer tag is permanently locked to this machine"
+                    title="Your Hub ID stays fixed"
                   >
                     #{lockedTag}
                     <span
@@ -318,7 +312,7 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
                 <button
                   className={`${styles.diceBtn} ${isSpinning ? styles.diceSpin : ''}`}
                   onClick={handleRollDice}
-                  title="Roll random nickname (Peer tag stays locked)"
+                  title="Roll random nickname"
                   type="button"
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
@@ -329,14 +323,12 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
 
               <div className={styles.idPreviewRow}>
                 <div className={styles.previewIdWrap}>
-                  <span>PUBLIC ID:</span>
-                  <span className={styles.previewPill}>
-                    {displayNickname}#{lockedTag}
-                  </span>
+                  <span>HUB ID:</span>
+                  <span className={styles.previewPill}>elfy/hub/#{lockedTag}</span>
                   <button
                     className={styles.copyIconBtn}
                     onClick={handleCopyId}
-                    title="Copy identifier"
+                    title="Copy Hub ID"
                     type="button"
                   >
                     <span className={`material-symbols-outlined ${styles.copyIdIcon}`} style={{ fontSize: '13px' }}>
@@ -399,9 +391,7 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
 
               <div className={styles.privacyNote}>
                 <span className={`material-symbols-outlined ${styles.lockIcon}`}>lock</span>
-                <span>
-                  Peer tag is permanently registered to this machine in SQLite local storage.
-                </span>
+                <span>Your Hub ID stays the same even when you change your nickname.</span>
               </div>
             </div>
           </form>

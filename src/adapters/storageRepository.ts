@@ -84,10 +84,12 @@ export class SqliteStorageRepository implements IStorageRepository {
     rawMachineUid: string,
     defaults: ProfileInitDefaults
   ): Promise<ProfileRowDto> {
+    const hash = await hashMachineUid(rawMachineUid);
+    const fixedTag = hash ? `#${hash.slice(0, 10)}` : normalizePeerTag(defaults.peerTag);
     const row = await dbGetOrInitProfileTauri(
       rawMachineUid,
       defaults.nickname,
-      normalizePeerTag(defaults.peerTag),
+      fixedTag,
       defaults.avatarUrl
     );
     return normalizeProfileRow(row);
@@ -212,9 +214,10 @@ export class TestFallbackStorageRepository implements IStorageRepository {
       return normalizeProfileRow(bucket.profile);
     }
 
+    const fixedTag = hash ? `#${hash.slice(0, 10)}` : normalizePeerTag(defaults.peerTag);
     const created: ProfileRowDto = {
       machineHash: hash,
-      peerTag: normalizePeerTag(defaults.peerTag),
+      peerTag: fixedTag,
       nickname: defaults.nickname.trim() || 'Companion',
       avatarUrl: defaults.avatarUrl,
       telemetryConsent: 'unset',

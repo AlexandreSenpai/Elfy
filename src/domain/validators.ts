@@ -314,6 +314,17 @@ const DATA_CHANNEL_PAYLOAD_PARSERS: Record<DataChannelMessageType, DataChannelPa
     if (!isNonEmptyString(p.peerIdSafe)) return null;
     return { type: 'stream_stopped', peerIdSafe: p.peerIdSafe };
   },
+  peer_profile_updated: (p) => {
+    if (!isNonEmptyString(p.peerIdSafe)) return null;
+    if (!isNonEmptyString(p.displayName)) return null;
+    if (!isString(p.avatarUrl)) return null;
+    return {
+      type: 'peer_profile_updated',
+      peerIdSafe: p.peerIdSafe,
+      displayName: p.displayName,
+      avatarUrl: p.avatarUrl,
+    };
+  },
   renegotiate_offer: (p) => {
     if (!isNonEmptyString(p.fromPeerIdSafe)) return null;
     const sdp = parseSdpInit(p.sdp);

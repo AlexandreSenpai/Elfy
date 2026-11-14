@@ -316,6 +316,7 @@ test('Test 2 — Machine Fingerprint Lock & Single Hub per User', async ({ brows
   const initialHubCode = await readMyHubCode(page);
   const initialTag = extractPeerTag(initialHubCode);
   expect(initialTag).not.toBe('');
+  expect(initialHubCode).toBe(`elfy/hub/${initialTag}`);
 
   await page.goto('/#/register');
   await expect(page.getByTestId('locked-peer-tag')).toContainText(initialTag);
@@ -323,11 +324,11 @@ test('Test 2 — Machine Fingerprint Lock & Single Hub per User', async ({ brows
   await page.locator('input[type="text"]').first().fill('NovaFox');
   await page.getByRole('button', { name: /save changes|get started/i }).click();
 
-  await expect(page.getByTestId('my-hub-code')).toContainText(`NovaFox${initialTag}`);
+  await expect(page.getByTestId('my-hub-code')).toHaveText(`elfy/hub/${initialTag}`);
   await expect(page.getByTestId('my-hub-code')).toHaveCount(1);
 
   await page.reload();
-  await expect(page.getByTestId('my-hub-code')).toContainText(`NovaFox${initialTag}`);
+  await expect(page.getByTestId('my-hub-code')).toHaveText(`elfy/hub/${initialTag}`);
 
   await page.goto('/#/register');
   await expect(page.getByTestId('locked-peer-tag')).toContainText(initialTag);
@@ -335,14 +336,40 @@ test('Test 2 — Machine Fingerprint Lock & Single Hub per User', async ({ brows
   await page.locator('input[type="text"]').first().fill('PixelMochi');
   await page.getByRole('button', { name: /save changes|get started/i }).click();
 
-  await expect(page.getByTestId('my-hub-code')).toContainText(`PixelMochi${initialTag}`);
+  await expect(page.getByTestId('my-hub-code')).toHaveText(`elfy/hub/${initialTag}`);
   await expect(page.getByTestId('my-hub-code')).toHaveCount(1);
+
+  // Verify changing nickname while actively sharing screen does not break stream or hub routing
+  const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't2-live');
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(guestRoom, 1, 800);
+
+  await ownerRoom.getByRole('button', { name: /edit persona/i }).click();
+  await ownerRoom.locator('input[type="text"]').first().fill('LiveRenamedHost');
+  await ownerRoom.getByRole('button', { name: /save changes|get started/i }).click();
+
+  await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText('LiveRenamedHost');
+  await expect(guestRoom.getByTestId('stream-tile').first()).toContainText('LiveRenamedHost');
+  await waitForContinuousPlayback(guestRoom, 1, 800);
 });
 
 test('Test 3 — Knock-to-Enter Gate & Automatic Friend Hub Saving', async ({ browser }) => {
   const context = await createTrackedContext(browser);
-  const { owner, guest, guestRoom } = await admitGuestToOwnerHub(context, 't3');
+  const { owner, guest, ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't3');
   const ownerTag = extractPeerTag(owner.hubCode);
+
+  const knockAlertStats = await ownerRoom.evaluate(() => {
+    const win = window as unknown as {
+      __ELFY_KNOCK_SOUNDS_PLAYED__?: number;
+      __ELFY_NOTIFICATIONS_SHOWN__?: Array<{ title: string; body: string }>;
+    };
+    return {
+      soundsPlayed: win.__ELFY_KNOCK_SOUNDS_PLAYED__ ?? 0,
+      notificationsShown: (win.__ELFY_NOTIFICATIONS_SHOWN__ ?? []).length,
+    };
+  });
+  expect(knockAlertStats.soundsPlayed).toBeGreaterThanOrEqual(1);
+  expect(knockAlertStats.notificationsShown).toBeGreaterThanOrEqual(1);
 
   await waitForSavedFriendHub(guestRoom, ownerTag);
   await guestRoom.goto('/#/');
@@ -517,9 +544,9 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
   await ownerRoom.getByTestId('toggle-share-btn').click();
   await waitForContinuousPlayback(guestRoom, 1, 800);
 
-  // Exact scenario: Host keeps sharing -> Guest leaves -> goes to Friend Hubs -> clicks Watch -> knocks -> accepted.
+  // Exact scenario: Host keeps sharing -> Guest leaves (directly returns to Friend Hubs) -> clicks Watch -> knocks -> accepted.
   await guestRoom.getByTestId('leave-hub-btn').click();
-  await guestRoom.getByRole('button', { name: /friend hubs/i }).click();
+  await expect(guestRoom.getByRole('button', { name: /re-join hub/i })).toHaveCount(0);
   const friendCard = guestRoom.getByTestId('friend-hub-card').first();
   await expect(friendCard).toBeVisible();
   await expect(friendCard.getByRole('button', { name: /watch/i })).toBeVisible({ timeout: 10_000 });
@@ -534,10 +561,11 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
   await expect(guestRoom.getByTestId('connection-failure-alert')).toBeHidden();
   await waitForContinuousPlayback(guestRoom, 1, 1400);
 
-  // Also verify Re-join Hub button directly from the left-room screen while Host keeps sharing
+  // Repeat leave -> direct Friend Hubs Watch re-entry while Host continues sharing
   await guestRoom.getByTestId('leave-hub-btn').click();
-  await expect(guestRoom.getByRole('button', { name: /re-join hub/i })).toBeVisible();
-  await guestRoom.getByRole('button', { name: /re-join hub/i }).click();
+  await expect(friendCard).toBeVisible();
+  await expect(friendCard.getByRole('button', { name: /watch/i })).toBeVisible({ timeout: 10_000 });
+  await friendCard.getByRole('button', { name: /watch/i }).click();
 
   await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
   await ownerRoom.getByTestId('accept-knock-btn').click();
@@ -547,10 +575,10 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
   await waitForContinuousPlayback(guestRoom, 1, 1400);
 
   await ownerRoom.getByTestId('leave-hub-btn').click();
-  await expect(ownerRoom.getByRole('button', { name: /re-join hub/i })).toBeVisible();
+  await expect(ownerRoom.getByTestId('my-hub-code')).toBeVisible();
   await expect(guestRoom.getByTestId('guest-knock-gate')).toBeVisible();
 
-  await ownerRoom.getByRole('button', { name: /re-join hub/i }).click();
+  await ownerRoom.getByTestId('open-my-hub-btn').click();
   await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
   await ownerRoom.getByTestId('toggle-share-btn').click();
   await waitForContinuousPlayback(ownerRoom, 1, 400);
@@ -656,7 +684,7 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
   const guestPage = await initPeerPage(context, guestUid);
   await openHomeAndSetConsent(guestPage, 'decline');
   const guestHubCode = await readMyHubCode(guestPage);
-  const guestPeerSafe = guestHubCode.replace(/^elfy\/hub\//, '').replace('#', '_');
+  const guestPeerSafe = extractPeerTag(guestHubCode).replace(/^#/, '');
   const phantomHub = 'elfy/hub/PhantomHost_9999';
   const phantomRoom = await knockGuestIntoHub(guestPage, phantomHub);
 

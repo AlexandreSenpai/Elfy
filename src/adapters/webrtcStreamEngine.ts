@@ -172,6 +172,9 @@ export class WebRtcStreamEngine implements IStreamEngine {
     stream_stopped: (entry, env) => {
       this.handleRemoteStreamStopped(entry, env);
     },
+    peer_profile_updated: (entry, env) => {
+      this.callbacks.onDataChannelMessage?.(entry.peerIdSafe, env);
+    },
     peer_left: (entry, env) => {
       this.callbacks.onDataChannelMessage?.(entry.peerIdSafe, env);
     },

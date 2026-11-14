@@ -48,6 +48,12 @@ pub fn hash_machine_uid(raw_machine_uid: &str) -> String {
     hex
 }
 
+/// Derives a fixed, low-collision 10-character exchangeable peer tag from the machine hash.
+pub fn derive_fixed_peer_tag(machine_hash: &str) -> String {
+    let prefix_len = 10.min(machine_hash.len());
+    format!("#{}", &machine_hash[..prefix_len])
+}
+
 /// Initializes the local SQLite database file and ensures required tables exist.
 pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
     let conn = open_connection(app)?;
@@ -198,8 +204,12 @@ fn get_or_init_profile_inner(
 ) -> Result<ProfileRowDto, String> {
     let machine_uid = require_non_empty(raw_machine_uid, "rawMachineUid")?;
     let nickname = require_non_empty(default_nickname, "defaultNickname")?;
-    let peer_tag = normalize_peer_tag(default_tag)?;
     let machine_hash = hash_machine_uid(machine_uid);
+    let peer_tag = if default_tag.trim().is_empty() {
+        derive_fixed_peer_tag(&machine_hash)
+    } else {
+        normalize_peer_tag(default_tag)?
+    };
 
     if let Some(existing) = find_profile_by_hash(conn, &machine_hash)? {
         return Ok(existing);

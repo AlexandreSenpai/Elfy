@@ -261,6 +261,13 @@ export interface StreamStoppedPayload {
   peerIdSafe: string;
 }
 
+export interface PeerProfileUpdatedPayload {
+  type: 'peer_profile_updated';
+  peerIdSafe: string;
+  displayName: string;
+  avatarUrl: string;
+}
+
 export interface RenegotiateOfferPayload {
   type: 'renegotiate_offer';
   fromPeerIdSafe: string;
@@ -299,6 +306,7 @@ export type DataChannelPayload =
   | PeerRosterSyncPayload
   | StreamStartedPayload
   | StreamStoppedPayload
+  | PeerProfileUpdatedPayload
   | RenegotiateOfferPayload
   | RenegotiateAnswerPayload
   | RenegotiateIcePayload

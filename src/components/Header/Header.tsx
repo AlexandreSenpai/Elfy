@@ -40,8 +40,8 @@ export const Header: React.FC<HeaderProps> = ({
   const effectiveRoomTitle = roomTitle || fallbackHub;
 
   const getConnectionText = (): string => {
-    if (rttMs > 0) return `${Math.round(rttMs)}ms P2P`;
-    if (isConnected) return 'P2P Ready';
+    if (rttMs > 0) return `${Math.round(rttMs)}ms`;
+    if (isConnected) return 'Connected';
     return 'Connecting...';
   };
 
