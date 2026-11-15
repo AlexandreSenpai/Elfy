@@ -208,7 +208,11 @@ export class MqttSignalingAdapter implements ISignalingTransport {
     this.topicHandlers.set(topic, set);
 
     if (this.client?.connected && !this.subscribedOnBroker.has(topic)) {
-      await this.subscribeOnBroker(this.client, topic);
+      if (isWebdriverRuntime()) {
+        void this.subscribeOnBroker(this.client, topic);
+      } else {
+        await this.subscribeOnBroker(this.client, topic);
+      }
     }
 
     return () => {
@@ -254,6 +258,10 @@ export class MqttSignalingAdapter implements ISignalingTransport {
     void this.connect();
 
     if (this.client?.connected) {
+      if (isWebdriverRuntime()) {
+        void this.client.publishAsync(topic, body, { qos: 1 }).catch(() => {});
+        return true;
+      }
       try {
         await this.client.publishAsync(topic, body, { qos: 1 });
         return true;

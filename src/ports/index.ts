@@ -4,10 +4,13 @@ import {
   DataChannelPayload,
   FriendHubRecordDto,
   LocalWindowBusMessage,
+  PeerTelemetryDto,
   ProfileRowDto,
   SignalingEnvelopeDto,
   SignalingPayload,
   StreamFpsOption,
+  StreamQualityLimitationReason,
+  StreamResolutionPreset,
   SystemMetricsDto,
   TelemetryConsentState,
   TelemetryEventDto,
@@ -85,18 +88,38 @@ export interface WebRtcStatsSnapshot {
   inboundFps: number;
   droppedFrames: number;
   rttMs: number;
+  activeCodec: string;
+  isHardwareAccelerated: boolean | null;
+  encoderImplementation: string;
+  qualityLimitationReason: StreamQualityLimitationReason;
+  outboundBitrateKbps: number;
+  inboundBitrateKbps: number;
+  packetLossPercent: number;
+  jitterMs: number;
+  audioCodec: string;
+  audioBitrateKbps: number;
+  audioJitterBufferMs: number;
+  audioPacketsLost: number;
+  peerStats: Record<string, PeerTelemetryDto>;
 }
 
 /** Bidirectional multi-peer WebRTC media and DataChannel engine. */
 export interface IStreamEngine {
   configure(localPeerIdSafe: string, callbacks: StreamEngineCallbacks): void;
   registerPeerSessionToken(remotePeerIdSafe: string, sessionToken: string): void;
-  startScreenCapture(fps?: StreamFpsOption): Promise<MediaStream>;
+  startScreenCapture(
+    fps?: StreamFpsOption,
+    resolution?: StreamResolutionPreset
+  ): Promise<MediaStream>;
   stopScreenCapture(): Promise<void>;
   getLocalStream(): MediaStream | null;
   getRemoteStream(peerIdSafe: string): MediaStream | null;
   getCurrentFps(): StreamFpsOption;
   setStreamFps(fps: StreamFpsOption): Promise<void>;
+  getCurrentResolution(): StreamResolutionPreset;
+  setStreamResolution(resolution: StreamResolutionPreset): Promise<void>;
+  refreshSenderEncodingParams(): Promise<void>;
+  setCpuThrottleFactor(factor: number): Promise<void>;
   initiatePeerConnection(remotePeerIdSafe: string, sessionToken: string): Promise<void>;
   handleIncomingOffer(
     remotePeerIdSafe: string,

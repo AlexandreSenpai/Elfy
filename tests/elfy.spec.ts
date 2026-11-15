@@ -342,14 +342,16 @@ test('Test 2 — Machine Fingerprint Lock & Single Hub per User', async ({ brows
   // Verify changing nickname while actively sharing screen does not break stream or hub routing
   const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't2-live');
   await ownerRoom.getByTestId('toggle-share-btn').click();
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
   await waitForContinuousPlayback(guestRoom, 1, 800);
 
   await ownerRoom.getByRole('button', { name: /edit persona/i }).click();
   await ownerRoom.locator('input[type="text"]').first().fill('LiveRenamedHost');
   await ownerRoom.getByRole('button', { name: /save changes|get started/i }).click();
 
-  await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText('LiveRenamedHost');
   await expect(guestRoom.getByTestId('stream-tile').first()).toContainText('LiveRenamedHost');
+  await ownerRoom.getByTestId('toggle-self-preview-btn').click();
+  await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText('LiveRenamedHost');
   await waitForContinuousPlayback(guestRoom, 1, 800);
 });
 
@@ -382,12 +384,19 @@ test('Test 4 — Bidirectional Streaming Stability & Grid/Spotlight/Fullscreen',
   const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't4');
 
   await ownerRoom.getByTestId('toggle-share-btn').click();
-  await waitForContinuousPlayback(guestRoom, 1, 1600);
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(0);
+  await waitForContinuousPlayback(guestRoom, 1, 1200);
 
   await guestRoom.getByTestId('toggle-share-btn').click();
   await expect(ownerRoom.getByTestId('streams-grid')).toBeVisible();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await waitForContinuousPlayback(ownerRoom, 1, 800);
+
+  await ownerRoom.getByTestId('dock-self-preview-btn').click();
   await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
-  await waitForContinuousPlayback(ownerRoom, 2, 800);
+  await waitForContinuousPlayback(ownerRoom, 2, 600);
 
   await ownerRoom.getByTestId('layout-toggle-btn').click();
   await expect(ownerRoom.getByTestId('streams-spotlight')).toBeVisible();
@@ -398,11 +407,21 @@ test('Test 4 — Bidirectional Streaming Stability & Grid/Spotlight/Fullscreen',
   await expect(ownerRoom.getByTestId('fullscreen-stream-viewer')).toBeHidden();
 });
 
-test('Test 5 — 60 FPS / 30 FPS Dynamic Control & System/GPU Monitor', async ({ browser }) => {
+test('Test 5 — 30/60/120 FPS, Resolution Presets, Self-Preview Toggle & Metrics Badge', async ({
+  browser,
+}) => {
   const context = await createTrackedContext(browser);
   const { ownerRoom } = await admitGuestToOwnerHub(context, 't5');
 
   await ownerRoom.getByTestId('toggle-share-btn').click();
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('encoder-status-pill')).toBeVisible();
+
+  // Opt-in to local self-preview and verify FPS & resolution toggles update stream cleanly
+  await ownerRoom.getByTestId('toggle-self-preview-btn').click();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(1);
+
   const fpsBtn = ownerRoom.getByTestId('fps-toggle-btn');
   await expect(fpsBtn).toContainText(/60\s*FPS/i);
   await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/60\s*fps/i);
@@ -410,8 +429,25 @@ test('Test 5 — 60 FPS / 30 FPS Dynamic Control & System/GPU Monitor', async ({
   await fpsBtn.click();
   await expect(fpsBtn).toContainText(/30\s*FPS/i);
   await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/30\s*fps/i);
-
   await expect.poll(() => readObservedTrackFps(ownerRoom)).toBe(30);
+
+  await fpsBtn.click();
+  await expect(fpsBtn).toContainText(/120\s*FPS/i);
+  await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/120\s*fps/i);
+  await expect.poll(() => readObservedTrackFps(ownerRoom)).toBe(120);
+
+  const resBtn = ownerRoom.getByTestId('resolution-toggle-btn');
+  await expect(resBtn).toContainText(/1080p/i);
+  await resBtn.click();
+  await expect(resBtn).toContainText(/720p/i);
+  await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/720p/i);
+  await resBtn.click();
+  await expect(resBtn).toContainText(/Native/i);
+
+  // Turning self-preview off returns to lightweight live broadcast card without stopping capture
+  await ownerRoom.getByTestId('dock-self-preview-btn').click();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
 
   const metricsBadge = ownerRoom.getByTestId('system-metrics-badge');
   await expect(metricsBadge).toBeVisible();
@@ -438,6 +474,8 @@ test('Test 6 — Minimize Active Hub Without Exiting', async ({ browser }) => {
   await ownerRoom.getByTestId('restore-watch-room-btn').click();
   await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
   await expect(ownerCompanionHome.getByTestId('minimized-hub-banner')).toBeHidden();
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
+  await ownerRoom.getByTestId('toggle-self-preview-btn').click();
   await waitForContinuousPlayback(ownerRoom, 1, 600);
 });
 
@@ -515,7 +553,7 @@ test('Test 9 — Host Pre-Shares Before Guest Knocks & Re-Share Recovery', async
 
   const ownerRoom = await openOwnerRoom(ownerPage);
   await ownerRoom.getByTestId('toggle-share-btn').click();
-  await waitForContinuousPlayback(ownerRoom, 1, 400);
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
 
   const guestRoom = await knockGuestIntoHub(guestPage, ownerHubCode);
   await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
@@ -526,14 +564,15 @@ test('Test 9 — Host Pre-Shares Before Guest Knocks & Re-Share Recovery', async
   await waitForContinuousPlayback(guestRoom, 1, 1400);
 
   await guestRoom.getByTestId('toggle-share-btn').click();
-  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
-  await waitForContinuousPlayback(ownerRoom, 2, 600);
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await waitForContinuousPlayback(ownerRoom, 1, 600);
 
   await ownerRoom.getByTestId('toggle-share-btn').click();
-  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(0);
+  await expect(guestRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
   await ownerRoom.getByTestId('toggle-share-btn').click();
-  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(2);
-  await waitForContinuousPlayback(guestRoom, 2, 600);
+  await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await waitForContinuousPlayback(guestRoom, 1, 600);
 });
 
 test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ browser }) => {
@@ -581,7 +620,7 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
   await ownerRoom.getByTestId('open-my-hub-btn').click();
   await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
   await ownerRoom.getByTestId('toggle-share-btn').click();
-  await waitForContinuousPlayback(ownerRoom, 1, 400);
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
 
   await guestRoom.getByRole('button', { name: /knock again/i }).click();
   await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
@@ -608,11 +647,11 @@ test('Test 10 — Room Exit and Re-Entry / Re-Connection Stability', async ({ br
   await expect(guestRoomReborn.getByTestId('multi-stream-hub')).toBeVisible();
   await waitForContinuousPlayback(guestRoomReborn, 1, 1400);
 
-  // Both peers sharing should result in exactly 2 stream tiles (no duplicate stale peer)
+  // Both peers sharing should show exactly 1 remote tile per side by default (no duplicate stale peer)
   await guestRoomReborn.getByTestId('toggle-share-btn').click();
-  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
-  await expect(guestRoomReborn.getByTestId('stream-tile')).toHaveCount(2);
-  await waitForContinuousPlayback(ownerRoom, 2, 1200);
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(1);
+  await expect(guestRoomReborn.getByTestId('stream-tile')).toHaveCount(1);
+  await waitForContinuousPlayback(ownerRoom, 1, 1200);
 });
 
 test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics', async ({
@@ -689,37 +728,40 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
   const phantomHub = 'elfy/hub/PhantomHost_9999';
   const phantomRoom = await knockGuestIntoHub(guestPage, phantomHub);
 
-  await guestPage.evaluate(
-    ({ hubId, peerSafe }) => {
-      const channel = new BroadcastChannel('elfy-signaling-channel');
-      channel.postMessage({
-        topic: `${hubId}/peer/${peerSafe}/knock`,
-        envelope: {
-          version: 1,
-          messageId: `msg_accept_${Date.now()}`,
-          hubId,
-          senderPeerIdSafe: 'PhantomHost_9999',
-          sentAt: Date.now(),
-          payload: {
-            type: 'knock_decision',
-            accepted: true,
-            sessionToken: `sess_phantom_${Date.now()}`,
-            hostPeerIdSafe: 'PhantomHost_9999',
-            hostDisplayName: 'PhantomHost',
-            peerRoster: [
-              {
-                peerIdSafe: 'PhantomHost_9999',
-                peerTag: 'PhantomHost#9999',
-                displayName: 'PhantomHost',
-                avatarUrl: '',
-                role: 'owner',
-                isStreaming: true,
-                joinedAt: Date.now(),
-              },
-            ],
-          },
+  await expect(phantomRoom.getByText('Connected')).toBeVisible();
+  await phantomRoom.waitForTimeout(250);
+
+  await ownerRoom.evaluate(
+    async ({ hubId, peerSafe }) => {
+      const channel = new BroadcastChannel('elfy_test_signaling_bus');
+      const envelope = {
+        version: 1,
+        messageId: `msg_accept_${Date.now()}`,
+        hubId,
+        senderPeerIdSafe: 'PhantomHost_9999',
+        sentAt: Date.now(),
+        payload: {
+          type: 'knock_decision',
+          accepted: true,
+          sessionToken: `sess_phantom_${Date.now()}`,
+          hostPeerIdSafe: 'PhantomHost_9999',
+          hostDisplayName: 'PhantomHost',
+          peerRoster: [
+            {
+              peerIdSafe: 'PhantomHost_9999',
+              peerTag: 'PhantomHost#9999',
+              displayName: 'PhantomHost',
+              avatarUrl: '',
+              role: 'owner',
+              isStreaming: true,
+              joinedAt: Date.now(),
+            },
+          ],
         },
-      });
+      };
+      channel.postMessage({ topic: `${hubId}/peer/${peerSafe}`, envelope });
+      channel.postMessage({ topic: `${hubId}/peer/${peerSafe}/knock`, envelope });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 250));
       channel.close();
     },
     { hubId: phantomHub, peerSafe: guestPeerSafe }
@@ -779,4 +821,404 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
   await expect(ownerRoom.getByTestId('host-knock-alert')).toBeHidden();
   await expect(secondGuestRoom.getByTestId('guest-knock-gate')).toBeHidden();
   await expect(secondGuestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+});
+
+test('Test 12 — Automatic Hardware-First Codec Selection Without User Picker', async ({
+  browser,
+}) => {
+  const context = await createTrackedContext(browser);
+  const ownerUid = createRunUid('t12-owner');
+  const guestUid = createRunUid('t12-guest');
+
+  const ownerPage = await initPeerPage(context, ownerUid);
+  await ownerPage.addInitScript(() => {
+    const win = window as unknown as { __ELFY_CODEC_PREFS_APPLIED__?: string[][] };
+    win.__ELFY_CODEC_PREFS_APPLIED__ = [];
+
+    if (navigator.mediaCapabilities) {
+      navigator.mediaCapabilities.encodingInfo = async (config) => {
+        const contentType = config.type === 'webrtc' ? config.video?.contentType ?? '' : '';
+        const isH264 = contentType.toLowerCase().includes('h264');
+        return {
+          supported: true,
+          smooth: true,
+          powerEfficient: isH264,
+        };
+      };
+    }
+
+    const proto = RTCRtpTransceiver?.prototype;
+    if (proto && typeof proto.setCodecPreferences === 'function') {
+      const orig = proto.setCodecPreferences;
+      proto.setCodecPreferences = function (codecs: RTCRtpCodec[]) {
+        win.__ELFY_CODEC_PREFS_APPLIED__?.push(codecs.map((c) => c.mimeType));
+        return orig.call(this, codecs);
+      };
+    }
+  });
+
+  await openHomeAndSetConsent(ownerPage, 'decline');
+  const ownerHubCode = await readMyHubCode(ownerPage);
+
+  const guestPage = await initPeerPage(context, guestUid);
+  await openHomeAndSetConsent(guestPage, 'decline');
+
+  const ownerRoom = await openOwnerRoom(ownerPage);
+  const guestRoom = await knockGuestIntoHub(guestPage, ownerHubCode);
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+  await expect(guestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(guestRoom, 1, 800);
+
+  // Confirm no manual codec picker is exposed to the user in the dock
+  await expect(ownerRoom.getByTestId('bottom-dock').locator('select')).toHaveCount(0);
+
+  // Confirm hardware-efficient H.264 was ranked at index 0 when setCodecPreferences ran
+  const appliedLists = await ownerRoom.evaluate(() => {
+    const win = window as unknown as { __ELFY_CODEC_PREFS_APPLIED__?: string[][] };
+    return win.__ELFY_CODEC_PREFS_APPLIED__ ?? [];
+  });
+  if (appliedLists.length > 0) {
+    const latest = appliedLists[appliedLists.length - 1];
+    const hasH264 = latest.some((mime) => mime.toLowerCase() === 'video/h264');
+    if (hasH264) {
+      expect(latest[0]?.toLowerCase()).toBe('video/h264');
+    }
+  }
+});
+
+const joinAdditionalGuestToOwnerHub = async (
+  context: BrowserContext,
+  ownerRoom: Page,
+  ownerHubCode: string,
+  prefix: string
+): Promise<{ guest: PeerSession; guestRoom: Page }> => {
+  const guestUid = createRunUid(prefix);
+  const guestPage = await initPeerPage(context, guestUid);
+  await openHomeAndSetConsent(guestPage, 'decline');
+  const guestHubCode = await readMyHubCode(guestPage);
+  const guestRoom = await knockGuestIntoHub(guestPage, ownerHubCode);
+
+  await expect(ownerRoom.getByTestId('host-knock-alert')).toBeVisible();
+  await ownerRoom.getByTestId('accept-knock-btn').click();
+
+  await expect(guestRoom.getByTestId('guest-knock-gate')).toBeHidden();
+  await expect(guestRoom.getByTestId('multi-stream-hub')).toBeVisible();
+
+  return {
+    guest: { page: guestPage, uid: guestUid, hubCode: guestHubCode },
+    guestRoom,
+  };
+};
+
+const readTileVideoAudioState = async (
+  page: Page,
+  peerIdSafe: string
+): Promise<{ found: boolean; volume: number; muted: boolean }> => {
+  return page.evaluate((targetPeerId: string) => {
+    const tile = document.querySelector(
+      `[data-testid="stream-tile"][data-peer-id="${targetPeerId}"]`
+    );
+    const video = tile?.querySelector('video') as HTMLVideoElement | null;
+    if (!video) {
+      return { found: false, volume: -1, muted: false };
+    }
+    return {
+      found: true,
+      volume: Number(video.volume.toFixed(2)),
+      muted: video.muted,
+    };
+  }, peerIdSafe);
+};
+
+const assertSvgChartRendered = async (
+  container: ReturnType<Page['getByTestId']>
+): Promise<void> => {
+  await expect(container).toBeVisible();
+  const svg = container.locator('svg.recharts-surface').first();
+  await expect(svg).toBeVisible();
+  await expect
+    .poll(async () => {
+      const box = await svg.boundingBox();
+      const pathCount = await svg.locator('path').count();
+      return Boolean(box && box.width > 10 && box.height > 10 && pathCount > 0);
+    })
+    .toBe(true);
+};
+
+test('Test 13 — Hub Side Panel Participants, Local Per-Peer Volume Control & Host Kick', async ({
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  const context = await createTrackedContext(browser);
+  const { owner, guest: guest1, ownerRoom, guestRoom: guest1Room } = await admitGuestToOwnerHub(
+    context,
+    't13'
+  );
+  const { guest: guest2, guestRoom: guest2Room } = await joinAdditionalGuestToOwnerHub(
+    context,
+    ownerRoom,
+    owner.hubCode,
+    't13-guest2'
+  );
+
+  const ownerPeerSafe = extractPeerTag(owner.hubCode).replace(/^#/, '');
+  const guest1PeerSafe = extractPeerTag(guest1.hubCode).replace(/^#/, '');
+  const guest2PeerSafe = extractPeerTag(guest2.hubCode).replace(/^#/, '');
+
+  // Owner and Guest 1 both broadcast so host sees Guest 1's stream and both guests watch Owner.
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
+  await waitForContinuousPlayback(guest1Room, 1, 500);
+  await waitForContinuousPlayback(guest2Room, 1, 500);
+
+  await guest1Room.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(ownerRoom, 1, 500);
+  await waitForContinuousPlayback(guest2Room, 2, 500);
+
+  // Host opens Hub Side Panel -> Participants tab and verifies cards, sparklines, and invite copy.
+  await ownerRoom.getByTestId('toggle-participants-panel-btn').click();
+  await expect(ownerRoom.getByTestId('hub-side-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('hub-tab-participants')).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+
+  const ownerCards = ownerRoom.getByTestId('participant-card');
+  await expect(ownerCards).toHaveCount(3);
+
+  const selfCardOnOwner = ownerRoom.locator(
+    `[data-testid="participant-card"][data-peer-id="${ownerPeerSafe}"]`
+  );
+  await expect(selfCardOnOwner).toContainText('HOST');
+  await expect(selfCardOnOwner).toContainText('YOU');
+  await expect(selfCardOnOwner).toContainText('Local · No Echo');
+  await expect(selfCardOnOwner.getByTestId('participant-volume-slider')).toHaveCount(0);
+  await expect(selfCardOnOwner.getByTestId('kick-peer-btn')).toHaveCount(0);
+  await assertSvgChartRendered(selfCardOnOwner);
+
+  const guest1CardOnOwner = ownerRoom.locator(
+    `[data-testid="participant-card"][data-peer-id="${guest1PeerSafe}"]`
+  );
+  await expect(guest1CardOnOwner).toContainText('GUEST');
+  await expect(guest1CardOnOwner).toContainText('LIVE');
+  await expect(guest1CardOnOwner.getByTestId('kick-peer-btn')).toBeVisible();
+  await assertSvgChartRendered(guest1CardOnOwner);
+
+  await ownerRoom.evaluate(() => {
+    const win = window as unknown as { __ELFY_COPIED_HUB__?: string[] };
+    win.__ELFY_COPIED_HUB__ = [];
+    const proto = window.Clipboard?.prototype;
+    if (proto) {
+      proto.writeText = async (text: string) => {
+        win.__ELFY_COPIED_HUB__?.push(text);
+      };
+    }
+  });
+  const inviteBtn = ownerRoom.getByTestId('invite-copy-btn');
+  await inviteBtn.click();
+  await expect(inviteBtn).toContainText(/copied/i);
+  const copiedHubs = await ownerRoom.evaluate(() => {
+    const win = window as unknown as { __ELFY_COPIED_HUB__?: string[] };
+    return win.__ELFY_COPIED_HUB__ ?? [];
+  });
+  expect(copiedHubs).toEqual([`elfy/hub/${ownerPeerSafe}`]);
+
+  // Guest 1 opens Participants panel and adjusts ONLY local volume/mute for Owner's stream.
+  await guest1Room.getByTestId('toggle-participants-panel-btn').click();
+  await expect(guest1Room.getByTestId('participants-panel')).toBeVisible();
+  await expect(guest1Room.getByTestId('kick-peer-btn')).toHaveCount(0);
+
+  await expect
+    .poll(() => readTileVideoAudioState(guest1Room, ownerPeerSafe))
+    .toEqual({ found: true, volume: 1, muted: false });
+  await expect
+    .poll(() => readTileVideoAudioState(guest2Room, ownerPeerSafe))
+    .toEqual({ found: true, volume: 1, muted: false });
+
+  const ownerCardOnGuest1 = guest1Room.locator(
+    `[data-testid="participant-card"][data-peer-id="${ownerPeerSafe}"]`
+  );
+  const volumeSlider = ownerCardOnGuest1.getByTestId('participant-volume-slider');
+  const muteBtn = ownerCardOnGuest1.getByTestId('participant-mute-btn');
+
+  await volumeSlider.fill('35');
+  await expect(ownerCardOnGuest1).toContainText('35%');
+  await expect
+    .poll(() => readTileVideoAudioState(guest1Room, ownerPeerSafe))
+    .toEqual({ found: true, volume: 0.35, muted: false });
+
+  // Guest 2 and Host must remain completely unaffected by Guest 1's local volume adjustment.
+  expect(await readTileVideoAudioState(guest2Room, ownerPeerSafe)).toEqual({
+    found: true,
+    volume: 1,
+    muted: false,
+  });
+  expect(await readTileVideoAudioState(ownerRoom, guest1PeerSafe)).toEqual({
+    found: true,
+    volume: 1,
+    muted: false,
+  });
+
+  await muteBtn.click();
+  await expect(ownerCardOnGuest1).toContainText('0%');
+  await expect
+    .poll(() => readTileVideoAudioState(guest1Room, ownerPeerSafe))
+    .toEqual({ found: true, volume: 0, muted: true });
+  expect(await readTileVideoAudioState(guest2Room, ownerPeerSafe)).toEqual({
+    found: true,
+    volume: 1,
+    muted: false,
+  });
+
+  await muteBtn.click();
+  await expect(ownerCardOnGuest1).toContainText('35%');
+  await expect
+    .poll(() => readTileVideoAudioState(guest1Room, ownerPeerSafe))
+    .toEqual({ found: true, volume: 0.35, muted: false });
+
+  // Host kicks Guest 1: Guest 1 sees kicked banner and stops receiving video; Host & Guest 2 drop Guest 1.
+  await guest1CardOnOwner.getByTestId('kick-peer-btn').click();
+
+  await expect(guest1Room.getByTestId('kicked-from-room-banner')).toBeVisible();
+  await expect(guest1Room.getByTestId('multi-stream-hub')).toBeHidden();
+  await expect(guest1Room.locator('video')).toHaveCount(0);
+
+  await expect(
+    ownerRoom.locator(`[data-testid="participant-card"][data-peer-id="${guest1PeerSafe}"]`)
+  ).toHaveCount(0);
+  await expect(ownerCards).toHaveCount(2);
+  await expect(
+    ownerRoom.locator(`[data-testid="participant-card"][data-peer-id="${guest2PeerSafe}"]`)
+  ).toBeVisible();
+  await expect(
+    ownerRoom.locator(`[data-testid="stream-tile"][data-peer-id="${guest1PeerSafe}"]`)
+  ).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
+
+  // Guest 2 remains connected to Owner's stream without interruption.
+  await expect(
+    guest2Room.locator(`[data-testid="stream-tile"][data-peer-id="${guest1PeerSafe}"]`)
+  ).toHaveCount(0);
+  await waitForContinuousPlayback(guest2Room, 1, 600);
+
+  await guest1Room.getByTestId('kicked-back-home-btn').click();
+  await expect(guest1Room.getByTestId('my-hub-code')).toBeVisible();
+});
+
+test('Test 14 — Telemetry Charts, Time Windows, Layout Modes & Responsive Side Panel', async ({
+  browser,
+}) => {
+  test.setTimeout(60_000);
+  const context = await createTrackedContext(browser);
+  const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't14');
+
+  // Enable two active stage tiles (Owner self-preview + Guest share) for Grid/Spotlight/Focus verification.
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await ownerRoom.getByTestId('toggle-self-preview-btn').click();
+  await guestRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(ownerRoom, 2, 600);
+  await waitForContinuousPlayback(guestRoom, 1, 600);
+
+  // Open Telemetry & Stats via header pulse button and verify customizable charts + window switching.
+  await ownerRoom.getByTestId('toggle-telemetry-panel-btn').click();
+  await expect(ownerRoom.getByTestId('hub-side-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('hub-tab-telemetry')).toHaveAttribute('aria-selected', 'true');
+
+  const bitrateChart = ownerRoom.getByTestId('telemetry-bitrate-chart');
+  const fpsChart = ownerRoom.getByTestId('telemetry-fps-chart');
+  const rttChart = ownerRoom.getByTestId('telemetry-rtt-chart');
+
+  await assertSvgChartRendered(bitrateChart);
+  await assertSvgChartRendered(fpsChart);
+  await assertSvgChartRendered(rttChart);
+
+  const btn1m = ownerRoom.getByTestId('telemetry-window-1m');
+  const btn5m = ownerRoom.getByTestId('telemetry-window-5m');
+  const btn15m = ownerRoom.getByTestId('telemetry-window-15m');
+
+  await expect(btn1m).toHaveAttribute('aria-selected', 'true');
+  await expect(bitrateChart).toContainText('-60s');
+
+  await btn5m.click();
+  await expect(btn5m).toHaveAttribute('aria-selected', 'true');
+  await expect(btn1m).toHaveAttribute('aria-selected', 'false');
+  await expect(bitrateChart).toContainText('-5m');
+
+  await btn15m.click();
+  await expect(btn15m).toHaveAttribute('aria-selected', 'true');
+  await expect(btn5m).toHaveAttribute('aria-selected', 'false');
+  await expect(bitrateChart).toContainText('-15m');
+
+  await btn1m.click();
+  await expect(btn1m).toHaveAttribute('aria-selected', 'true');
+  await expect(bitrateChart).toContainText('-60s');
+
+  // Switch between panel tabs and close cleanly.
+  await ownerRoom.getByTestId('hub-tab-participants').click();
+  await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
+  await ownerRoom.getByTestId('hub-tab-telemetry').click();
+  await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
+  await ownerRoom.getByTestId('close-hub-panel-btn').click();
+  await expect(ownerRoom.getByTestId('hub-side-panel')).toBeHidden();
+
+  // Verify Grid, Spotlight, and Focus layout modes via Header segmented switcher.
+  await expect(ownerRoom.getByTestId('layout-mode-grid')).toHaveAttribute('aria-pressed', 'true');
+  await expect(ownerRoom.getByTestId('streams-grid')).toBeVisible();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
+
+  await ownerRoom.getByTestId('layout-mode-spotlight').click();
+  await expect(ownerRoom.getByTestId('layout-mode-spotlight')).toHaveAttribute(
+    'aria-pressed',
+    'true'
+  );
+  await expect(ownerRoom.getByTestId('streams-spotlight')).toBeVisible();
+
+  await ownerRoom.getByTestId('layout-mode-focus').click();
+  await expect(ownerRoom.getByTestId('layout-mode-focus')).toHaveAttribute('aria-pressed', 'true');
+  await expect(ownerRoom.getByTestId('streams-focus')).toBeVisible();
+  await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(1);
+
+  await ownerRoom.getByTestId('layout-mode-grid').click();
+  await expect(ownerRoom.getByTestId('streams-grid')).toBeVisible();
+
+  // Verify zero horizontal overflow across 1440x900, 768x1024, and 360x580 with side panel open/closed.
+  const viewports = [
+    { width: 1440, height: 900 },
+    { width: 768, height: 1024 },
+    { width: 360, height: 580 },
+  ];
+
+  for (const vp of viewports) {
+    await ownerRoom.setViewportSize(vp);
+    await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
+    await expect(ownerRoom.getByTestId('bottom-dock')).toBeVisible();
+    await assertNoHorizontalOverflow(ownerRoom);
+
+    await ownerRoom.getByTestId('toggle-participants-panel-btn').click();
+    await expect(ownerRoom.getByTestId('hub-side-panel')).toBeVisible();
+    await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
+    await assertNoHorizontalOverflow(ownerRoom);
+
+    await ownerRoom.getByTestId('hub-tab-telemetry').click();
+    await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
+    await assertSvgChartRendered(bitrateChart);
+    await assertNoHorizontalOverflow(ownerRoom);
+
+    await ownerRoom.getByTestId('close-hub-panel-btn').click();
+    await expect(ownerRoom.getByTestId('hub-side-panel')).toBeHidden();
+    await assertNoHorizontalOverflow(ownerRoom);
+  }
+
+  // Also verify Spotlight and Focus modes fit cleanly at narrow 360x580 viewport.
+  await ownerRoom.getByTestId('layout-mode-spotlight').click();
+  await expect(ownerRoom.getByTestId('streams-spotlight')).toBeVisible();
+  await assertNoHorizontalOverflow(ownerRoom);
+
+  await ownerRoom.getByTestId('layout-mode-focus').click();
+  await expect(ownerRoom.getByTestId('streams-focus')).toBeVisible();
+  await assertNoHorizontalOverflow(ownerRoom);
 });

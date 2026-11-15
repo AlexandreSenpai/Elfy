@@ -25,6 +25,7 @@ import {
 } from '../utils/hubTopics';
 import { playKnockSound, showKnockNotification } from '../utils/notifications';
 import {
+  claimToastActionTauri,
   isTauri,
   listenKnockToastActionTauri,
   openStreamWindowTauri,
@@ -116,6 +117,8 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
   const probeTimerRef = useRef<number | null>(null);
   const probeGenerationRef = useRef<number>(0);
   const mountedRef = useRef<boolean>(true);
+  const activeOwnerRoomHubRef = useRef<string | null>(null);
+  const handledToastActionIdsRef = useRef<Set<string>>(new Set());
 
   const clearProbeTimer = useCallback((): void => {
     if (probeTimerRef.current === null) return;
@@ -374,6 +377,15 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
       },
       restore_hub_requested: () => {},
       disconnect_hub_requested: () => {},
+      owner_room_status: (msg) => {
+        if (msg.type !== 'owner_room_status') return;
+        const canonical = toCanonicalHubId(msg.hubId);
+        if (msg.active) {
+          activeOwnerRoomHubRef.current = canonical;
+        } else if (activeOwnerRoomHubRef.current === canonical) {
+          activeOwnerRoomHubRef.current = null;
+        }
+      },
     };
 
     const unsubBus = localWindowBus.subscribe((message) => {
@@ -424,34 +436,20 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
     let unsub: (() => void) | null = null;
     let unlistenToast: (() => void) | null = null;
 
-    const wasHandledByRoom = (peerIdSafe: string): boolean => {
-      if (typeof localStorage === 'undefined') return false;
-      try {
-        const raw = localStorage.getItem('elfy_handled_toast_peer');
-        if (!raw) return false;
-        const sep = raw.lastIndexOf(':');
-        if (sep <= 0) return false;
-        const handledPeer = raw.slice(0, sep);
-        const handledAt = Number(raw.slice(sep + 1));
-        if (!Number.isFinite(handledAt) || Date.now() - handledAt > 5000) return false;
-        return !peerIdSafe || handledPeer === peerIdSafe;
-      } catch {
-        return false;
-      }
-    };
-
     const subscribeOwnerKnocks = async (): Promise<void> => {
       try {
         await signalingTransport.connect();
         const fn = await signalingTransport.subscribeTopic(myKnockTopic, (envelope) => {
           if (envelope.payload.type !== 'knock_request') return;
+          if (activeOwnerRoomHubRef.current === normalizedMyHub) return;
           const payload = envelope.payload;
           if (payload.peerIdSafe === localPeerIdRef.current) return;
-          playKnockSound(payload.peerIdSafe);
+          playKnockSound(payload.peerIdSafe, envelope.messageId);
           showKnockNotification(payload.displayName, payload.peerTag, {
             peerIdSafe: payload.peerIdSafe,
             hubId: myHub,
             replyTopic: payload.replyTopic,
+            messageId: envelope.messageId,
           });
         });
         if (!active) {
@@ -467,15 +465,19 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
     void subscribeOwnerKnocks();
 
     void listenKnockToastActionTauri((actionPayload) => {
-      if (!active) return;
-      if (actionPayload.hubId && normalizeHubTopic(actionPayload.hubId) !== normalizedMyHub) {
-        return;
-      }
-
-      window.setTimeout(() => {
-        if (!active || wasHandledByRoom(actionPayload.peerIdSafe)) return;
+      void (async () => {
+        if (!active) return;
+        if (actionPayload.hubId && normalizeHubTopic(actionPayload.hubId) !== normalizedMyHub) {
+          return;
+        }
+        if (activeOwnerRoomHubRef.current === normalizedMyHub) {
+          return;
+        }
 
         if (actionPayload.action === 'reject') {
+          const claimed = await claimToastActionTauri(actionPayload.actionId);
+          if (!claimed || !active) return;
+
           const fallbackInbox = getGuestInboxTopic(myHub, actionPayload.peerIdSafe);
           const replyTopic =
             actionPayload.replyTopic || (fallbackInbox ? `${fallbackInbox}/knock` : '');
@@ -498,29 +500,30 @@ export const useFriendHubsDiscovery = (profile: UserProfile): UseFriendHubsDisco
             },
           };
 
-          void signalingTransport.connect().then(() => {
-            void signalingTransport.publish(replyTopic, rejectEnvelope);
-          });
+          await signalingTransport.connect();
+          if (active) {
+            await signalingTransport.publish(replyTopic, rejectEnvelope);
+          }
           return;
         }
 
-        if (actionPayload.action === 'accept' && typeof localStorage !== 'undefined') {
-          try {
-            localStorage.setItem(
-              'elfy_pending_toast_action',
-              JSON.stringify({
-                ...actionPayload,
-                hubId: normalizedMyHub || myHub,
-                timestamp: Date.now(),
-              })
-            );
-          } catch {
-            // Ignore storage quota/access errors.
+        if (actionPayload.action === 'accept') {
+          if (actionPayload.actionId) {
+            if (handledToastActionIdsRef.current.has(actionPayload.actionId)) return;
+            if (handledToastActionIdsRef.current.size >= 32) {
+              handledToastActionIdsRef.current.clear();
+            }
+            handledToastActionIdsRef.current.add(actionPayload.actionId);
           }
+          // Rust ToastState keeps background accept queued until stream window consumes it.
+          await openStreamWindowTauri(normalizedMyHub || myHub, false, 'owner');
+          return;
         }
 
-        void openStreamWindowTauri(normalizedMyHub || myHub, false, 'owner');
-      }, 180);
+        const claimed = await claimToastActionTauri(actionPayload.actionId);
+        if (!claimed || !active) return;
+        await openStreamWindowTauri(normalizedMyHub || myHub, false, 'owner');
+      })();
     }).then((fn) => {
       if (!active) {
         fn();

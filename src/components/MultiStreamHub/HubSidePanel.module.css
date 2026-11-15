@@ -1,0 +1,179 @@
+.sidePanel {
+  width: 372px;
+  max-width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background-color: rgba(15, 20, 28, 0.97);
+  backdrop-filter: blur(22px);
+  border-left: 1px solid var(--outline-variant);
+  box-shadow: -8px 0 30px rgba(0, 0, 0, 0.45);
+  z-index: 35;
+  overflow: hidden;
+  animation: slideInDrawer 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideInDrawer {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 960px) {
+  .sidePanel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(372px, 100%);
+    max-width: 100%;
+    z-index: 55;
+    box-shadow: -12px 0 36px rgba(0, 0, 0, 0.72);
+  }
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--outline-variant);
+  background-color: rgba(11, 15, 20, 0.75);
+  flex-shrink: 0;
+}
+
+.panelTitleWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pulseDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--primary);
+  box-shadow: 0 0 8px var(--primary);
+  animation: pulse 1.8s infinite ease-in-out;
+  flex-shrink: 0;
+}
+
+.panelTitle {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--on-surface);
+  text-transform: uppercase;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.hideBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--outline-variant);
+  background-color: var(--surface-container);
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.hideBtn:hover {
+  color: var(--on-surface);
+  background-color: var(--surface-container-high);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.closeBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--outline-variant);
+  background-color: var(--surface-container);
+  color: var(--on-surface-variant);
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.closeBtn:hover {
+  color: #ffffff;
+  background-color: rgba(255, 77, 109, 0.25);
+  border-color: rgba(255, 77, 109, 0.5);
+}
+
+.tabBar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--outline-variant);
+  background-color: rgba(11, 15, 20, 0.55);
+  flex-shrink: 0;
+}
+
+.tabBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background-color: transparent;
+  color: var(--on-surface-variant);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  transition: all 0.16s ease;
+}
+
+.tabBtn:hover {
+  color: var(--on-surface);
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+.tabBtnActive {
+  color: var(--on-surface);
+  background-color: var(--surface-container);
+  border-color: rgba(255, 77, 109, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.12);
+}
+
+.tabBody {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}

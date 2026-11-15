@@ -1,8 +1,10 @@
 export type TelemetryConsentState = 'unset' | 'granted' | 'denied';
-export type StreamFpsOption = 30 | 60;
+export type StreamFpsOption = 30 | 60 | 120;
+export type StreamResolutionPreset = '720p' | '1080p' | 'source';
+export type StreamQualityLimitationReason = 'none' | 'cpu' | 'bandwidth' | 'other';
 export type RoomRole = 'owner' | 'guest';
 export type KnockStatus = 'idle' | 'knocking' | 'accepted' | 'rejected' | 'timeout';
-export type WatchLayoutMode = 'grid' | 'spotlight' | 'fullscreen';
+export type WatchLayoutMode = 'grid' | 'spotlight' | 'focus' | 'fullscreen';
 export type ScreenMode = 'multi-stream' | 'friend-hubs' | 'nickname' | 'left-hub';
 export type HubLiveState = 'broadcasting' | 'online' | 'offline';
 export type ConnectionFailureStage =
@@ -120,15 +122,63 @@ export interface HostResourceMetricsDto {
   highLoadWarning: boolean;
 }
 
+export interface PeerTelemetryDto {
+  peerIdSafe: string;
+  rttMs: number;
+  bitrateKbps: number;
+  fps: number;
+  packetLossPercent: number;
+  jitterMs: number;
+  connectionState: RTCPeerConnectionState | 'unknown';
+  dataChannelState: RTCDataChannelState | 'closed';
+}
+
+export interface TelemetryHistoryPointDto {
+  timestamp: number;
+  bitrateKbps: number;
+  outboundFps: number;
+  inboundFps: number;
+  rttMs: number;
+  packetLossPercent: number;
+  jitterMs: number;
+  cpuUsagePercent: number;
+  memoryUsedMb: number;
+  droppedFrames: number;
+  audioJitterBufferMs: number;
+  audioBitrateKbps: number;
+}
+
+export interface PeerTelemetryHistoryPointDto {
+  timestamp: number;
+  rttMs: number;
+  bitrateKbps: number;
+  fps: number;
+  packetLossPercent: number;
+}
+
 export interface SystemMetricsDto {
   cpuUsagePercent: number;
   memoryUsedMb: number;
   memoryTotalMb: number;
   highLoadWarning: boolean;
+  cpuCores: number;
   outboundFps: number;
   inboundFps: number;
   droppedFrames: number;
   rttMs: number;
+  activeCodec: string;
+  isHardwareAccelerated: boolean | null;
+  encoderImplementation: string;
+  qualityLimitationReason: StreamQualityLimitationReason;
+  outboundBitrateKbps: number;
+  inboundBitrateKbps: number;
+  packetLossPercent: number;
+  jitterMs: number;
+  audioCodec: string;
+  audioBitrateKbps: number;
+  audioJitterBufferMs: number;
+  audioPacketsLost: number;
+  peerStats: Record<string, PeerTelemetryDto>;
 }
 
 export interface ActiveMinimizedHubDto {
@@ -229,7 +279,8 @@ export type SignalingPayload =
   | WebRtcOfferPayload
   | WebRtcAnswerPayload
   | WebRtcIcePayload
-  | PeerLeftPayload;
+  | PeerLeftPayload
+  | PeerKickedPayload;
 
 export type SignalingMessageType = SignalingPayload['type'];
 
@@ -291,6 +342,12 @@ export interface PeerLeftPayload {
   peerIdSafe: string;
 }
 
+export interface PeerKickedPayload {
+  type: 'peer_kicked';
+  peerIdSafe: string;
+  reason?: string;
+}
+
 export interface PingPayload {
   type: 'ping';
   sentAt: number;
@@ -311,6 +368,7 @@ export type DataChannelPayload =
   | RenegotiateAnswerPayload
   | RenegotiateIcePayload
   | PeerLeftPayload
+  | PeerKickedPayload
   | PingPayload
   | PongPayload;
 
@@ -329,6 +387,7 @@ export type LocalWindowBusMessage =
   | { type: 'minimized_hub_updated'; hub: ActiveMinimizedHubDto }
   | { type: 'minimized_hub_cleared'; hubId: string }
   | { type: 'restore_hub_requested'; hubId: string }
-  | { type: 'disconnect_hub_requested'; hubId: string };
+  | { type: 'disconnect_hub_requested'; hubId: string }
+  | { type: 'owner_room_status'; hubId: string; active: boolean };
 
 export type LocalWindowBusMessageType = LocalWindowBusMessage['type'];

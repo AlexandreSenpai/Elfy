@@ -1,10 +1,11 @@
 mod db;
 mod system_monitor;
+mod toast;
 
 use tauri::{
     menu::MenuBuilder,
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-    Emitter, Manager, WindowEvent,
+    Manager, WindowEvent,
 };
 use tauri_plugin_positioner::{Position, WindowExt};
 
@@ -38,6 +39,7 @@ fn show_register_window(app: tauri::AppHandle) -> Result<(), String> {
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
+    .center()
     .build()
     .map_err(|e| e.to_string())?;
 
@@ -57,7 +59,7 @@ fn close_register_window(app: tauri::AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window("register") else {
         return Ok(());
     };
-    let _ = window.hide();
+    let _ = window.close();
     Ok(())
 }
 
@@ -252,28 +254,23 @@ fn configure_main_window(app: &tauri::App) -> Result<(), String> {
     Ok(())
 }
 
-fn configure_register_window(app: &tauri::App) {
-    let Some(reg_win) = app.get_webview_window("register") else {
-        return;
-    };
-    let reg_w = reg_win.clone();
-    reg_win.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = reg_w.hide();
-        }
-    });
-}
-
 fn configure_stream_window(app: &tauri::App) {
     let Some(stream_win) = app.get_webview_window("stream") else {
         return;
     };
     let stream_w = stream_win.clone();
     stream_win.on_window_event(move |event| {
-        if let WindowEvent::CloseRequested { api, .. } = event {
-            api.prevent_close();
-            let _ = stream_w.hide();
+        match event {
+            WindowEvent::CloseRequested { api, .. } => {
+                api.prevent_close();
+                let _ = stream_w.hide();
+            }
+            WindowEvent::Destroyed => {
+                if let Some(toast_state) = stream_w.try_state::<toast::ToastState>() {
+                    toast_state.clear_active_owner_hub();
+                }
+            }
+            _ => {}
         }
     });
 }
@@ -322,301 +319,6 @@ fn acquire_single_instance_lock() -> bool {
 
     let _ = INSTANCE_LOCK.set(file);
     true
-}
-
-#[cfg(target_os = "windows")]
-const ELFY_AUMID: &str = "com.alexandresenpai.elfy";
-
-#[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct KnockToastActionEvent {
-    action: String,
-    peer_id_safe: String,
-    display_name: String,
-    peer_tag: String,
-    hub_id: String,
-    reply_topic: String,
-}
-
-#[cfg(target_os = "windows")]
-fn ensure_toast_icon_file() -> Option<std::path::PathBuf> {
-    let icon_path = std::env::temp_dir().join("elfy_toast_icon.png");
-    let icon_bytes: &[u8] = include_bytes!("../icons/128x128.png");
-    if std::fs::write(&icon_path, icon_bytes).is_ok() && icon_path.exists() {
-        return Some(icon_path);
-    }
-    if icon_path.exists() {
-        Some(icon_path)
-    } else {
-        None
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn ensure_windows_aumid_registered() {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let key = format!(r"HKCU\Software\Classes\AppUserModelId\{ELFY_AUMID}");
-    let _ = std::process::Command::new("reg")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["add", &key, "/v", "DisplayName", "/t", "REG_SZ", "/d", "Elfy", "/f"])
-        .output();
-    let _ = std::process::Command::new("reg")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["add", &key, "/v", "IconBackgroundColor", "/t", "REG_SZ", "/d", "0", "/f"])
-        .output();
-    let _ = std::process::Command::new("reg")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["add", &key, "/v", "ShowInSettings", "/t", "REG_DWORD", "/d", "1", "/f"])
-        .output();
-    if let Some(icon_path) = ensure_toast_icon_file() {
-        let icon_uri = icon_path.to_string_lossy().into_owned();
-        let _ = std::process::Command::new("reg")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["add", &key, "/v", "IconUri", "/t", "REG_SZ", "/d", &icon_uri, "/f"])
-            .output();
-    }
-}
-
-fn focus_window_on_toast_open(app: &tauri::AppHandle) {
-    if let Some(stream_win) = app.get_webview_window("stream") {
-        if stream_win.is_visible().unwrap_or(false) {
-            let _ = stream_win.unminimize();
-            let _ = stream_win.show();
-            let _ = stream_win.set_focus();
-            return;
-        }
-    }
-    if let Some(main_win) = app.get_webview_window("main") {
-        let _ = main_win.unminimize();
-        let _ = main_win.show();
-        let _ = main_win.set_focus();
-    }
-}
-
-fn emit_knock_toast_action(
-    app: &tauri::AppHandle,
-    action: &str,
-    meta: &KnockToastActionEvent,
-) {
-    let mut payload = meta.clone();
-    payload.action = action.to_string();
-    if payload.action == "open" {
-        focus_window_on_toast_open(app);
-    }
-    let _ = app.emit("knock-toast-action", payload);
-}
-
-#[cfg(target_os = "windows")]
-fn build_knock_winrt_toast(
-    app_id: &str,
-    title: &str,
-    body: &str,
-    icon_path: Option<&std::path::Path>,
-    app: tauri::AppHandle,
-    meta: KnockToastActionEvent,
-    done_tx: std::sync::mpsc::SyncSender<()>,
-) -> tauri_winrt_notification::Toast {
-    use tauri_winrt_notification::{Duration, IconCrop, Scenario, Sound, Toast};
-
-    let mut toast = Toast::new(app_id)
-        .title(title)
-        .text1(body)
-        .text2("Click Allow to let them in, or Decline to dismiss.")
-        .duration(Duration::Long)
-        .scenario(Scenario::Reminder)
-        .sound(Some(Sound::Default))
-        .add_button("Allow", "accept")
-        .add_button("Decline", "reject");
-
-    if let Some(path) = icon_path {
-        toast = toast.icon(path, IconCrop::Circular, "Elfy");
-    }
-
-    let activate_tx = done_tx.clone();
-    toast = toast.on_activated(move |arg| {
-        let resolved_action = match arg.as_deref() {
-            Some("accept") => "accept",
-            Some("reject") => "reject",
-            _ => "open",
-        };
-        emit_knock_toast_action(&app, resolved_action, &meta);
-        let _ = activate_tx.try_send(());
-        Ok(())
-    });
-
-    toast.on_dismissed(move |_| {
-        let _ = done_tx.try_send(());
-        Ok(())
-    })
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_powershell_balloon_fallback(
-    app: &tauri::AppHandle,
-    title: &str,
-    body: &str,
-    meta: &KnockToastActionEvent,
-) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-    let exe_path = std::env::current_exe()
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    let script = r#"
-$ErrorActionPreference = 'Stop'
-$title = $env:ELFY_NOTIFY_TITLE
-$body = $env:ELFY_NOTIFY_BODY
-$exePath = $env:ELFY_EXE_PATH
-if ([string]::IsNullOrWhiteSpace($title)) { $title = 'Elfy' }
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-$notify = New-Object System.Windows.Forms.NotifyIcon
-$icon = $null
-if (-not [string]::IsNullOrWhiteSpace($exePath) -and (Test-Path -LiteralPath $exePath)) {
-  try { $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($exePath) } catch { $icon = $null }
-}
-if ($null -eq $icon) {
-  $icon = [System.Drawing.SystemIcons]::Information
-}
-$notify.Icon = $icon
-$notify.Text = 'Elfy'
-$notify.Visible = $true
-$script:clicked = $false
-$notify.add_BalloonTipClicked({
-  $script:clicked = $true
-  Write-Output 'ACTION:open'
-})
-$notify.ShowBalloonTip(7000, $title, $body, [System.Windows.Forms.ToolTipIcon]::Info)
-$deadline = [DateTime]::UtcNow.AddSeconds(7)
-while (-not $script:clicked -and [DateTime]::UtcNow -lt $deadline) {
-  [System.Windows.Forms.Application]::DoEvents()
-  Start-Sleep -Milliseconds 100
-}
-$notify.Visible = $false
-$notify.Dispose()
-"#;
-
-    if let Ok(output) = std::process::Command::new("powershell")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", script])
-        .env("ELFY_NOTIFY_TITLE", title)
-        .env("ELFY_NOTIFY_BODY", body)
-        .env("ELFY_EXE_PATH", exe_path)
-        .output()
-    {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.contains("ACTION:open") {
-            emit_knock_toast_action(app, "open", meta);
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn spawn_windows_toast_notification(
-    app: tauri::AppHandle,
-    title: String,
-    body: String,
-    meta: KnockToastActionEvent,
-) {
-    use tauri_winrt_notification::Toast;
-
-    std::thread::spawn(move || {
-        ensure_windows_aumid_registered();
-        let icon_path = ensure_toast_icon_file();
-        let (done_tx, done_rx) = std::sync::mpsc::sync_channel::<()>(4);
-
-        let primary_toast = build_knock_winrt_toast(
-            ELFY_AUMID,
-            &title,
-            &body,
-            icon_path.as_deref(),
-            app.clone(),
-            meta.clone(),
-            done_tx.clone(),
-        );
-
-        let active_toast = if let Err(primary_err) = primary_toast.show() {
-            eprintln!("[Elfy Toast] Primary AUMID failed: {primary_err}");
-            let fallback_toast = build_knock_winrt_toast(
-                Toast::POWERSHELL_APP_ID,
-                &title,
-                &body,
-                icon_path.as_deref(),
-                app.clone(),
-                meta.clone(),
-                done_tx,
-            );
-            if let Err(fallback_err) = fallback_toast.show() {
-                eprintln!("[Elfy Toast] PowerShell AUMID failed: {fallback_err}");
-                spawn_powershell_balloon_fallback(&app, &title, &body, &meta);
-                return;
-            }
-            fallback_toast
-        } else {
-            primary_toast
-        };
-
-        // Keep Toast and its COM TypedEventHandlers alive until activated/dismissed or timeout.
-        let _ = done_rx.recv_timeout(std::time::Duration::from_secs(60));
-        drop(active_toast);
-    });
-}
-
-#[tauri::command]
-fn show_knock_notification(
-    app: tauri::AppHandle,
-    display_name: String,
-    peer_tag: String,
-    peer_id_safe: Option<String>,
-    hub_id: Option<String>,
-    reply_topic: Option<String>,
-) -> Result<(), String> {
-    let clean_name = display_name.trim();
-    let clean_tag = peer_tag.trim();
-    let caller = if clean_name.is_empty() { "Someone" } else { clean_name };
-    let title = "Elfy — Knock Request".to_string();
-    let body = if clean_tag.is_empty() {
-        format!("{caller} wants to join your Hub")
-    } else {
-        format!("{caller} ({clean_tag}) wants to join your Hub")
-    };
-
-    if let Some(stream_win) = app.get_webview_window("stream") {
-        let _ = stream_win.request_user_attention(Some(tauri::UserAttentionType::Informational));
-    } else if let Some(main_win) = app.get_webview_window("main") {
-        let _ = main_win.request_user_attention(Some(tauri::UserAttentionType::Informational));
-    }
-
-    let meta = KnockToastActionEvent {
-        action: String::new(),
-        peer_id_safe: peer_id_safe.unwrap_or_default(),
-        display_name: caller.to_string(),
-        peer_tag: clean_tag.to_string(),
-        hub_id: hub_id.unwrap_or_default(),
-        reply_topic: reply_topic.unwrap_or_default(),
-    };
-
-    #[cfg(target_os = "windows")]
-    spawn_windows_toast_notification(app, title, body, meta);
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = meta;
-        use tauri_plugin_notification::NotificationExt;
-        let _ = app
-            .notification()
-            .builder()
-            .title(&title)
-            .body(&body)
-            .show();
-    }
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -669,11 +371,12 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             #[cfg(target_os = "windows")]
-            ensure_windows_aumid_registered();
-            db::init_db(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
+            toast::init_windows_toast_aumid();
+            let db_state = db::init_db(app.handle()).map_err(Box::<dyn std::error::Error>::from)?;
+            app.manage(db_state);
+            app.manage(toast::ToastState::default());
             system_monitor::init_monitor();
             configure_main_window(app).map_err(Box::<dyn std::error::Error>::from)?;
-            configure_register_window(app);
             configure_stream_window(app);
             setup_tray(app)?;
             Ok(())
@@ -691,7 +394,11 @@ pub fn run() {
             toggle_fullscreen,
             set_fullscreen,
             is_fullscreen,
-            show_knock_notification,
+            toast::show_knock_notification,
+            toast::register_owner_room_session,
+            toast::unregister_owner_room_session,
+            toast::consume_pending_toast_actions,
+            toast::claim_toast_action,
             quit_app,
             db::db_get_or_init_profile,
             db::db_update_profile,

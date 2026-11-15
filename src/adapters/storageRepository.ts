@@ -24,8 +24,10 @@ interface TestDbBucket {
 
 const TEST_DB_PREFIX = 'elfy_test_db_';
 
-const normalizeFps = (fps: number): StreamFpsOption => {
-  return fps === 30 ? 30 : 60;
+const normalizeFps = (fps: unknown): StreamFpsOption => {
+  if (fps === 30) return 30;
+  if (fps === 120) return 120;
+  return 60;
 };
 
 const normalizePeerTag = (tag: string): string => {
@@ -139,7 +141,7 @@ const parseTestProfile = (raw: unknown): ProfileRowDto | null => {
     nickname: raw.nickname,
     avatarUrl: raw.avatarUrl,
     telemetryConsent: isTelemetryConsentState(raw.telemetryConsent) ? raw.telemetryConsent : 'unset',
-    preferredFps: raw.preferredFps === 30 ? 30 : 60,
+    preferredFps: normalizeFps(raw.preferredFps),
     updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : Date.now(),
   });
 };

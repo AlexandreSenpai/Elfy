@@ -5,23 +5,29 @@
   border-radius: var(--radius-xl);
   overflow: hidden;
   background-color: var(--surface-lowest);
-  border: 1px solid var(--outline-variant);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: var(--shadow-md);
-  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
   min-height: 200px;
   min-width: 0;
   width: 100%;
   height: 100%;
 }
 
-.tile:hover {
-  border-color: rgba(255, 77, 109, 0.5);
-  box-shadow: 0 12px 32px rgba(255, 77, 109, 0.12), var(--shadow-lg);
+.tileCompact {
+  min-height: 112px;
+  border-radius: var(--radius-lg);
 }
 
-.spotlighted {
-  border-color: rgba(255, 77, 109, 0.8) !important;
-  box-shadow: 0 0 35px rgba(255, 77, 109, 0.25), var(--shadow-lg) !important;
+.tile:hover {
+  border-color: rgba(255, 77, 109, 0.55);
+  box-shadow: 0 14px 34px rgba(255, 77, 109, 0.14), var(--shadow-lg);
+}
+
+.spotlighted,
+.focused {
+  border-color: rgba(255, 77, 109, 0.72) !important;
+  box-shadow: 0 0 32px rgba(255, 77, 109, 0.2), var(--shadow-lg) !important;
 }
 
 .videoArea {
@@ -33,6 +39,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  background-color: #05070a;
 }
 
 .realVideo {
@@ -47,8 +54,23 @@
 .videoGradientOverlay {
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, rgba(11, 15, 20, 0.85) 0%, transparent 45%, rgba(11, 15, 20, 0.4) 100%);
+  background: radial-gradient(circle at 50% 40%, rgba(255, 77, 109, 0.08), transparent 60%),
+    linear-gradient(to top, rgba(7, 10, 14, 0.9) 0%, rgba(11, 15, 20, 0.5) 55%, rgba(7, 10, 14, 0.7) 100%);
   pointer-events: none;
+}
+
+.edgeScrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(7, 10, 14, 0.45) 0%,
+    transparent 20%,
+    transparent 76%,
+    rgba(7, 10, 14, 0.65) 100%
+  );
+  pointer-events: none;
+  z-index: 5;
 }
 
 /* Top Stream Overlay */
@@ -66,14 +88,17 @@
 }
 
 .livePill {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
   border-radius: var(--radius-full);
-  background-color: rgba(11, 15, 20, 0.92);
-  border: 1px solid var(--outline-variant);
+  background-color: rgba(11, 15, 20, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   pointer-events: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .liveDot {
@@ -81,40 +106,79 @@
   height: 7px;
   border-radius: 50%;
   background-color: var(--primary);
-  box-shadow: 0 0 6px var(--primary);
+  box-shadow: 0 0 8px var(--primary);
   animation: pulse 1.8s infinite ease-in-out;
+  flex-shrink: 0;
 }
 
 .liveText {
   font-family: var(--font-mono);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 800;
   color: var(--primary);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
 }
 
 .bullet {
   color: var(--outline);
   font-size: 10px;
+  flex-shrink: 0;
 }
 
 .resText {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: var(--on-surface-variant);
+  font-weight: 600;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topRightGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  flex-shrink: 0;
+}
+
+.latencyPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: var(--radius-full);
+  background-color: rgba(16, 185, 129, 0.16);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(16, 185, 129, 0.38);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #34d399;
+  white-space: nowrap;
+}
+
+.latencyDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #10b981;
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.75);
 }
 
 .topActions {
   display: flex;
   align-items: center;
   gap: 4px;
-  opacity: 0;
+  opacity: 0.88;
   transition: opacity 0.2s ease-in-out;
-  pointer-events: auto;
 }
 
 .tile:hover .topActions,
-.spotlighted .topActions {
+.spotlighted .topActions,
+.focused .topActions {
   opacity: 1;
 }
 
@@ -122,25 +186,26 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-sm);
-  background-color: rgba(11, 15, 20, 0.92);
-  border: 1px solid var(--outline-variant);
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background-color: rgba(11, 15, 20, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--on-surface-variant);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.18s ease;
 }
 
 .actionBtn:hover {
   color: var(--on-surface);
   background-color: var(--surface-container-high);
-  border-color: rgba(255, 77, 109, 0.4);
+  border-color: rgba(255, 77, 109, 0.5);
 }
 
 .actionBtnActive {
   color: var(--primary);
-  border-color: var(--primary);
+  border-color: rgba(255, 77, 109, 0.75);
   background-color: rgba(255, 77, 109, 0.2);
 }
 
@@ -161,19 +226,21 @@
 .streamerTag {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
-  padding: 4px 10px;
+  max-width: 100%;
+  padding: 4px 10px 4px 6px;
   border-radius: var(--radius-full);
-  background-color: rgba(11, 15, 20, 0.92);
-  border: 1px solid var(--outline-variant);
+  background-color: rgba(11, 15, 20, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: var(--shadow-sm);
 }
 
 .streamerAvatarWrap {
   position: relative;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
 }
 
@@ -182,71 +249,135 @@
   height: 100%;
   border-radius: 50%;
   object-fit: cover;
-  border: 1px solid var(--primary);
+  border: 1.5px solid rgba(255, 77, 109, 0.75);
 }
 
 .avatarDot {
   position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 6px;
-  height: 6px;
+  bottom: -1px;
+  right: -1px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background-color: var(--primary);
+  background-color: #10b981;
+  border: 1.5px solid #0b0f14;
 }
 
 .streamerName {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--on-surface);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.hostBadge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--primary-dim);
+  background-color: rgba(255, 77, 109, 0.22);
+  border: 1px solid rgba(255, 77, 109, 0.45);
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
 .categoryPill {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--secondary);
-  background-color: rgba(0, 166, 224, 0.2);
+  background-color: rgba(0, 166, 224, 0.18);
+  border: 1px solid rgba(123, 208, 255, 0.25);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-full);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Volume control */
+/* Local per-stream volume control */
 .volumeWrap {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 4px 10px 4px 6px;
   border-radius: var(--radius-full);
-  background-color: rgba(11, 15, 20, 0.92);
-  border: 1px solid var(--outline-variant);
-  opacity: 0;
-  transition: opacity 0.2s ease-in-out;
+  background-color: rgba(11, 15, 20, 0.82);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  opacity: 0.92;
+  transition: opacity 0.2s ease-in-out, border-color 0.2s ease;
   flex-shrink: 0;
 }
 
 .tile:hover .volumeWrap,
-.spotlighted .volumeWrap {
+.spotlighted .volumeWrap,
+.focused .volumeWrap {
   opacity: 1;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.volumeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--primary);
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.volumeBtn:hover {
+  transform: scale(1.1);
+  color: var(--primary-hover);
 }
 
 .volumeIcon {
   font-size: 16px;
-  color: var(--primary);
 }
 
 .volumeSlider {
-  width: 64px;
+  width: 68px;
   height: 4px;
   border-radius: var(--radius-full);
   background-color: var(--surface-container-highest);
   accent-color: var(--primary);
   cursor: pointer;
+}
+
+.tileCompact .topOverlay,
+.tileCompact .bottomOverlay {
+  top: 6px;
+  left: 6px;
+  right: 6px;
+}
+
+.tileCompact .bottomOverlay {
+  top: auto;
+  bottom: 6px;
+}
+
+.tileCompact .livePill {
+  padding: 2px 7px;
+}
+
+.tileCompact .resText,
+.tileCompact .categoryPill,
+.tileCompact .latencyPill {
+  display: none;
+}
+
+.tileCompact .actionBtn {
+  width: 24px;
+  height: 24px;
 }
 
 @media (hover: none), (max-width: 768px) {
@@ -260,6 +391,28 @@
   }
 
   .volumeSlider {
-    width: 48px;
+    width: 52px;
+  }
+}
+
+@media (max-width: 440px) {
+  .topOverlay {
+    top: 6px;
+    left: 6px;
+    right: 6px;
+  }
+
+  .bottomOverlay {
+    bottom: 6px;
+    left: 6px;
+    right: 6px;
+  }
+
+  .latencyPill {
+    display: none;
+  }
+
+  .volumeSlider {
+    width: 42px;
   }
 }

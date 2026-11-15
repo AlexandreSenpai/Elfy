@@ -37,19 +37,6 @@
         "transparent": false,
         "visible": false,
         "skipTaskbar": false
-      },
-      {
-        "title": "Elfy • Setup",
-        "label": "register",
-        "url": "index.html#/register",
-        "width": 580,
-        "height": 620,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "visible": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": false
       }
     ],
     "security": {

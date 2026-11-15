@@ -1,5 +1,6 @@
 .streamContainer {
   width: 100vw;
+  max-width: 100%;
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -28,7 +29,8 @@
 }
 
 .statusBox,
-.leftHubCard {
+.leftHubCard,
+.kickedBannerCard {
   max-width: 440px;
   width: 100%;
   padding: 28px 22px;
@@ -43,8 +45,38 @@
   box-shadow: var(--shadow-md);
 }
 
+.kickedBannerCard {
+  border-color: rgba(255, 95, 86, 0.45);
+  background: linear-gradient(160deg, rgba(255, 95, 86, 0.1) 0%, var(--surface-container) 55%);
+}
+
+.kickedIconCircle {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background-color: var(--error-bg);
+  border: 1px solid rgba(255, 95, 86, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kickedReasonPill {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffb4ab;
+  background-color: rgba(255, 95, 86, 0.15);
+  border: 1px solid rgba(255, 95, 86, 0.35);
+  border-radius: var(--radius-full);
+  padding: 4px 12px;
+  max-width: 100%;
+  word-break: break-word;
+}
+
 .statusBox h3,
-.leftHubCard h3 {
+.leftHubCard h3,
+.kickedBannerCard h3 {
   font-size: 19px;
   font-weight: 700;
   color: var(--on-surface);
@@ -52,7 +84,8 @@
 }
 
 .statusBox p,
-.leftHubCard p {
+.leftHubCard p,
+.kickedBannerCard p {
   font-size: 13px;
   color: var(--on-surface-variant);
   line-height: 1.5;

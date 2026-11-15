@@ -1,10 +1,10 @@
-import { sendNotification } from '@tauri-apps/plugin-notification';
 import { isTauri, showKnockNotificationTauri } from './tauri';
 
 export interface KnockNotificationMeta {
   peerIdSafe?: string;
   hubId?: string;
   replyTopic?: string;
+  messageId?: string;
 }
 
 export interface RecordedKnockNotification {
@@ -14,6 +14,7 @@ export interface RecordedKnockNotification {
   peerIdSafe?: string;
   hubId?: string;
   replyTopic?: string;
+  messageId?: string;
   actions: string[];
   timestamp: number;
 }
@@ -25,36 +26,111 @@ interface NotificationWindowGlobals {
   webkitAudioContext?: typeof AudioContext;
 }
 
-const KNOCK_DEDUP_STORAGE_KEY = 'elfy_last_knock_alert';
-const KNOCK_DEDUP_WINDOW_MS = 1200;
-const recentKnockSoundMap = new Map<string, number>();
-const recentKnockNotifyMap = new Map<string, number>();
+const KNOCK_DEDUP_STORAGE_KEY = 'elfy_knock_dedup_v2';
+const PEER_DEDUP_WINDOW_MS = 2_500;
+const MESSAGE_DEDUP_WINDOW_MS = 60_000;
+const MAX_STORED_DEDUP_ENTRIES = 24;
+
+interface DedupEntry {
+  key: string;
+  ts: number;
+  ttlMs: number;
+}
+
+const recentKnockSoundMap = new Map<string, DedupEntry>();
+const recentKnockNotifyMap = new Map<string, DedupEntry>();
+
+const pruneDedupMap = (map: Map<string, DedupEntry>, now: number): void => {
+  for (const [k, entry] of map.entries()) {
+    if (now - entry.ts >= entry.ttlMs) {
+      map.delete(k);
+    }
+  }
+};
+
+const readStorageDedupEntries = (kind: 'sound' | 'notify', now: number): DedupEntry[] => {
+  if (typeof localStorage === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(`${KNOCK_DEDUP_STORAGE_KEY}_${kind}`);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is DedupEntry =>
+        typeof item === 'object' &&
+        item !== null &&
+        typeof (item as DedupEntry).key === 'string' &&
+        typeof (item as DedupEntry).ts === 'number' &&
+        typeof (item as DedupEntry).ttlMs === 'number' &&
+        now - (item as DedupEntry).ts < (item as DedupEntry).ttlMs
+    );
+  } catch {
+    return [];
+  }
+};
+
+const writeStorageDedupEntries = (kind: 'sound' | 'notify', entries: DedupEntry[]): void => {
+  if (typeof localStorage === 'undefined') return;
+  try {
+    const trimmed = entries.slice(-MAX_STORED_DEDUP_ENTRIES);
+    localStorage.setItem(`${KNOCK_DEDUP_STORAGE_KEY}_${kind}`, JSON.stringify(trimmed));
+  } catch {
+    // Ignore localStorage quota/access errors.
+  }
+};
 
 const shouldDeduplicateKnock = (
   kind: 'sound' | 'notify',
-  key: string,
-  localMap: Map<string, number>
+  peerKeyRaw: string,
+  localMap: Map<string, DedupEntry>,
+  messageId?: string
 ): boolean => {
   const now = Date.now();
-  const normalizedKey = `${kind}:${key.trim().toLowerCase() || 'unknown'}`;
-  const lastLocal = localMap.get(normalizedKey) ?? 0;
-  if (now - lastLocal < KNOCK_DEDUP_WINDOW_MS) {
+  pruneDedupMap(localMap, now);
+
+  const normalizedPeerKey = `peer:${peerKeyRaw.trim().toLowerCase() || 'unknown'}`;
+  const cleanMsgId = messageId?.trim();
+  const normalizedMsgKey = cleanMsgId ? `msg:${cleanMsgId}` : null;
+
+  const existingPeer = localMap.get(normalizedPeerKey);
+  if (existingPeer && now - existingPeer.ts < PEER_DEDUP_WINDOW_MS) {
     return true;
   }
-  localMap.set(normalizedKey, now);
-
-  if (typeof localStorage !== 'undefined') {
-    try {
-      const storageKey = `${KNOCK_DEDUP_STORAGE_KEY}_${normalizedKey}`;
-      const prev = Number(localStorage.getItem(storageKey) ?? '0');
-      if (Number.isFinite(prev) && now - prev < KNOCK_DEDUP_WINDOW_MS) {
-        return true;
-      }
-      localStorage.setItem(storageKey, String(now));
-    } catch {
-      // Ignore localStorage quota/access errors.
+  if (normalizedMsgKey) {
+    const existingMsg = localMap.get(normalizedMsgKey);
+    if (existingMsg && now - existingMsg.ts < MESSAGE_DEDUP_WINDOW_MS) {
+      return true;
     }
   }
+
+  const stored = readStorageDedupEntries(kind, now);
+  if (
+    stored.some(
+      (entry) =>
+        (entry.key === normalizedPeerKey && now - entry.ts < PEER_DEDUP_WINDOW_MS) ||
+        (normalizedMsgKey !== null && entry.key === normalizedMsgKey && now - entry.ts < MESSAGE_DEDUP_WINDOW_MS)
+    )
+  ) {
+    localMap.set(normalizedPeerKey, { key: normalizedPeerKey, ts: now, ttlMs: PEER_DEDUP_WINDOW_MS });
+    if (normalizedMsgKey) {
+      localMap.set(normalizedMsgKey, { key: normalizedMsgKey, ts: now, ttlMs: MESSAGE_DEDUP_WINDOW_MS });
+    }
+    return true;
+  }
+
+  const peerEntry: DedupEntry = { key: normalizedPeerKey, ts: now, ttlMs: PEER_DEDUP_WINDOW_MS };
+  localMap.set(normalizedPeerKey, peerEntry);
+  const nextStored = stored.filter(
+    (entry) => entry.key !== normalizedPeerKey && entry.key !== normalizedMsgKey
+  );
+  nextStored.push(peerEntry);
+
+  if (normalizedMsgKey) {
+    const msgEntry: DedupEntry = { key: normalizedMsgKey, ts: now, ttlMs: MESSAGE_DEDUP_WINDOW_MS };
+    localMap.set(normalizedMsgKey, msgEntry);
+    nextStored.push(msgEntry);
+  }
+  writeStorageDedupEntries(kind, nextStored);
 
   return false;
 };
@@ -70,9 +146,12 @@ let sharedAudioCtx: AudioContext | null = null;
 /**
  * Plays a gentle two-tone chime to alert the hub owner of an incoming knock request.
  */
-export const playKnockSound = (dedupKey?: string): void => {
+export const playKnockSound = (dedupKey?: string, messageId?: string): void => {
   if (typeof window === 'undefined') return;
-  if (dedupKey && shouldDeduplicateKnock('sound', dedupKey, recentKnockSoundMap)) {
+  if (
+    (dedupKey || messageId) &&
+    shouldDeduplicateKnock('sound', dedupKey || messageId || 'knock', recentKnockSoundMap, messageId)
+  ) {
     return;
   }
 
@@ -131,7 +210,8 @@ export const showKnockNotification = (
     shouldDeduplicateKnock(
       'notify',
       meta?.peerIdSafe || cleanTag || cleanName,
-      recentKnockNotifyMap
+      recentKnockNotifyMap,
+      meta?.messageId
     )
   ) {
     return;
@@ -154,6 +234,7 @@ export const showKnockNotification = (
       peerIdSafe: meta?.peerIdSafe,
       hubId: meta?.hubId,
       replyTopic: meta?.replyTopic,
+      messageId: meta?.messageId,
       actions: ['Allow', 'Decline'],
       timestamp: Date.now(),
     };
@@ -168,13 +249,8 @@ export const showKnockNotification = (
       peerIdSafe: meta?.peerIdSafe,
       hubId: meta?.hubId,
       replyTopic: meta?.replyTopic,
-    }).catch(() => {
-      try {
-        sendNotification({ title, body });
-      } catch {
-        // Ignore secondary plugin error.
-      }
-    });
+      messageId: meta?.messageId,
+    }).catch(() => {});
     return;
   }
 

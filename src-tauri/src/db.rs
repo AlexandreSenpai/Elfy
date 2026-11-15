@@ -4,12 +4,15 @@ use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 const DB_FILE_NAME: &str = "elfy.sqlite";
 const DEFAULT_FPS: u32 = 60;
 const FALLBACK_FPS: u32 = 30;
+const HIGH_FPS: u32 = 120;
+const VALID_FPS_VALUES: [u32; 3] = [FALLBACK_FPS, DEFAULT_FPS, HIGH_FPS];
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5000;
 const VALID_CONSENT_VALUES: [&str; 3] = ["unset", "granted", "denied"];
 
@@ -54,10 +57,32 @@ pub fn derive_fixed_peer_tag(machine_hash: &str) -> String {
     format!("#{}", &machine_hash[..prefix_len])
 }
 
-/// Initializes the local SQLite database file and ensures required tables exist.
-pub fn init_db(app: &tauri::AppHandle) -> Result<(), String> {
+/// Thread-safe managed SQLite connection initialized once at startup.
+pub struct DbState {
+    conn: Mutex<Connection>,
+}
+
+impl DbState {
+    pub fn new(conn: Connection) -> Self {
+        Self {
+            conn: Mutex::new(conn),
+        }
+    }
+
+    fn with_conn<T>(&self, f: impl FnOnce(&Connection) -> Result<T, String>) -> Result<T, String> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| format!("Database connection lock poisoned: {e}"))?;
+        f(&conn)
+    }
+}
+
+/// Initializes the local SQLite database file, ensures schema exists, and returns managed state.
+pub fn init_db(app: &tauri::AppHandle) -> Result<DbState, String> {
     let conn = open_connection(app)?;
-    ensure_schema(&conn)
+    ensure_schema(&conn)?;
+    Ok(DbState::new(conn))
 }
 
 fn require_non_empty<'a>(value: &'a str, field_name: &str) -> Result<&'a str, String> {
@@ -80,9 +105,9 @@ fn validate_fps(preferred_fps: Option<u32>) -> Result<Option<u32>, String> {
     let Some(fps) = preferred_fps else {
         return Ok(None);
     };
-    if fps != DEFAULT_FPS && fps != FALLBACK_FPS {
+    if !VALID_FPS_VALUES.contains(&fps) {
         return Err(format!(
-            "preferredFps must be {FALLBACK_FPS} or {DEFAULT_FPS}"
+            "preferredFps must be {FALLBACK_FPS}, {DEFAULT_FPS}, or {HIGH_FPS}"
         ));
     }
     Ok(Some(fps))
@@ -123,12 +148,6 @@ fn open_connection(app: &tauri::AppHandle) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
     conn.busy_timeout(Duration::from_millis(SQLITE_BUSY_TIMEOUT_MS))
         .map_err(|e| e.to_string())?;
-    Ok(conn)
-}
-
-fn open_ready_connection(app: &tauri::AppHandle) -> Result<Connection, String> {
-    let conn = open_connection(app)?;
-    ensure_schema(&conn)?;
     Ok(conn)
 }
 
@@ -370,72 +389,70 @@ fn remove_friend_hub_inner(
 
 #[tauri::command]
 pub fn db_get_or_init_profile(
-    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
     raw_machine_uid: String,
     default_nickname: String,
     default_tag: String,
     default_avatar: String,
 ) -> Result<ProfileRowDto, String> {
-    let conn = open_ready_connection(&app)?;
-    get_or_init_profile_inner(
-        &conn,
-        &raw_machine_uid,
-        &default_nickname,
-        &default_tag,
-        &default_avatar,
-    )
+    state.with_conn(|conn| {
+        get_or_init_profile_inner(
+            conn,
+            &raw_machine_uid,
+            &default_nickname,
+            &default_tag,
+            &default_avatar,
+        )
+    })
 }
 
 #[tauri::command]
 pub fn db_update_profile(
-    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
     raw_machine_uid: String,
     nickname: String,
     avatar_url: String,
     preferred_fps: Option<u32>,
 ) -> Result<ProfileRowDto, String> {
-    let conn = open_ready_connection(&app)?;
-    update_profile_inner(
-        &conn,
-        &raw_machine_uid,
-        &nickname,
-        &avatar_url,
-        preferred_fps,
-    )
+    state.with_conn(|conn| {
+        update_profile_inner(
+            conn,
+            &raw_machine_uid,
+            &nickname,
+            &avatar_url,
+            preferred_fps,
+        )
+    })
 }
 
 #[tauri::command]
 pub fn db_set_telemetry_consent(
-    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
     raw_machine_uid: String,
     consent: String,
 ) -> Result<ProfileRowDto, String> {
-    let conn = open_ready_connection(&app)?;
-    set_telemetry_consent_inner(&conn, &raw_machine_uid, &consent)
+    state.with_conn(|conn| set_telemetry_consent_inner(conn, &raw_machine_uid, &consent))
 }
 
 #[tauri::command]
-pub fn db_list_friend_hubs(app: tauri::AppHandle) -> Result<Vec<FriendHubRowDto>, String> {
-    let conn = open_ready_connection(&app)?;
-    list_friend_hubs_inner(&conn)
+pub fn db_list_friend_hubs(state: tauri::State<'_, DbState>) -> Result<Vec<FriendHubRowDto>, String> {
+    state.with_conn(list_friend_hubs_inner)
 }
 
 #[tauri::command]
 pub fn db_upsert_friend_hub(
-    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
     hub: FriendHubRowDto,
 ) -> Result<Vec<FriendHubRowDto>, String> {
-    let conn = open_ready_connection(&app)?;
-    upsert_friend_hub_inner(&conn, &hub)
+    state.with_conn(|conn| upsert_friend_hub_inner(conn, &hub))
 }
 
 #[tauri::command]
 pub fn db_remove_friend_hub(
-    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
     hub_id: String,
 ) -> Result<Vec<FriendHubRowDto>, String> {
-    let conn = open_ready_connection(&app)?;
-    remove_friend_hub_inner(&conn, &hub_id)
+    state.with_conn(|conn| remove_friend_hub_inner(conn, &hub_id))
 }
 
 #[cfg(test)]
@@ -494,6 +511,25 @@ mod tests {
         assert_eq!(updated.nickname, "Nova");
         assert_eq!(updated.preferred_fps, 30);
 
+        let updated_high_fps = update_profile_inner(
+            &conn,
+            "uid-001",
+            "Nova",
+            "avatar_03_red.png",
+            Some(120),
+        )
+        .expect("update profile to 120fps");
+        assert_eq!(updated_high_fps.preferred_fps, 120);
+
+        let rejected_fps = update_profile_inner(
+            &conn,
+            "uid-001",
+            "Nova",
+            "avatar_03_red.png",
+            Some(144),
+        );
+        assert!(rejected_fps.is_err());
+
         let consented = set_telemetry_consent_inner(&conn, "uid-001", "granted")
             .expect("set telemetry consent");
         assert_eq!(consented.telemetry_consent, "granted");
@@ -517,5 +553,23 @@ mod tests {
         let after_remove = remove_friend_hub_inner(&conn, "elfy/hub/Mochi_abcd1")
             .expect("remove hub");
         assert!(after_remove.is_empty());
+    }
+
+    #[test]
+    fn db_state_reuses_single_initialized_connection() {
+        let state = DbState::new(setup_memory_conn());
+        state
+            .with_conn(|conn| {
+                get_or_init_profile_inner(conn, "uid-state", "Mochi", "abcd1", "avatar_01.png")
+            })
+            .expect("create profile on pooled state connection");
+
+        let reloaded = state
+            .with_conn(|conn| {
+                get_or_init_profile_inner(conn, "uid-state", "Ignored", "zzzz9", "avatar_02.png")
+            })
+            .expect("reuse same in-memory connection in DbState");
+        assert_eq!(reloaded.nickname, "Mochi");
+        assert_eq!(reloaded.peer_tag, "#abcd1");
     }
 }

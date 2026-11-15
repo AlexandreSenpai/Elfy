@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import styles from './Header.module.css';
-import { UserProfile } from '../../domain/dtos';
+import { RoomPeerDto, UserProfile, WatchLayoutMode } from '../../domain/dtos';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
 import { formatFullPeerTag } from '../../utils/hubTopics';
 import {
@@ -11,6 +11,7 @@ import {
   toggleMaximizeWindowTauri,
 } from '../../utils/tauri';
 import { DockContextMenu, useDockContextMenu } from '../DockContextMenu/DockContextMenu';
+import type { HubSidePanelTab } from '../MultiStreamHub/HubSidePanel';
 
 interface HeaderProps {
   profile: UserProfile;
@@ -18,6 +19,11 @@ interface HeaderProps {
   activeStreamsCount: number;
   rttMs?: number;
   isConnected?: boolean;
+  layoutMode?: WatchLayoutMode;
+  onSelectLayoutMode?: (mode: WatchLayoutMode) => void;
+  peers?: RoomPeerDto[];
+  activePanelTab?: HubSidePanelTab | null;
+  onTogglePanelTab?: (tab: HubSidePanelTab) => void;
   onMinimizeHub?: () => void | Promise<void>;
   onCloseStream?: () => void | Promise<void>;
   onOpenProfile?: () => void | Promise<void>;
@@ -29,6 +35,11 @@ export const Header: React.FC<HeaderProps> = ({
   activeStreamsCount,
   rttMs = 0,
   isConnected = false,
+  layoutMode,
+  onSelectLayoutMode,
+  peers,
+  activePanelTab = null,
+  onTogglePanelTab,
   onMinimizeHub,
   onCloseStream,
   onOpenProfile,
@@ -92,6 +103,10 @@ export const Header: React.FC<HeaderProps> = ({
     void toggleMaximizeWindowTauri();
   };
 
+  const showRoomControls = Boolean(layoutMode && onSelectLayoutMode);
+  const showPanelControls = Boolean(peers && onTogglePanelTab);
+  const previewPeers = (peers ?? []).slice(0, 3);
+
   return (
     <>
       <header
@@ -106,101 +121,209 @@ export const Header: React.FC<HeaderProps> = ({
             data-testid="dock-brand-trigger"
             title="Right-click for Elfy options"
           >
-          <div className={styles.mascotLogo}>
-            <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" className={styles.mascotImg} />
+            <div className={styles.mascotLogo}>
+              <img src={ELFY_MASCOT_ICON} alt="Elfy mascot" className={styles.mascotImg} />
+            </div>
+            <span className={styles.brandTitle}>Elfy</span>
           </div>
-          <span className={styles.brandTitle}>Elfy</span>
-        </div>
 
-        <span className={styles.slashDivider}>/</span>
+          <span className={styles.slashDivider}>/</span>
 
-        <div className={styles.roomInfo}>
-          <span className={styles.roomName} title={effectiveRoomTitle}>
-            {effectiveRoomTitle}
-          </span>
-          <span className={styles.activeBadge}>
-            {activeStreamsCount} {activeStreamsCount === 1 ? 'Stream' : 'Streams'} Active
-          </span>
-        </div>
-      </div>
-
-      <div className={styles.rightSection}>
-        <div className={styles.meshBadge}>
-          <span className={`${styles.pulseDot} ${!isConnected ? styles.pulseDotIdle : ''}`} />
-          <span>{getConnectionText()}</span>
-        </div>
-
-        <button className={styles.inviteBtn} onClick={handleCopyLink} title="Copy Hub Invite Code" type="button">
-          <span className={`material-symbols-outlined ${styles.inviteIcon}`}>link</span>
-          <span className={styles.inviteText}>{effectiveRoomTitle}</span>
-          {copied && <span className={styles.copiedTag}>Copied!</span>}
-        </button>
-
-        {onMinimizeHub && (
-          <button
-            className={styles.quickMinBtn}
-            onClick={() => void onMinimizeHub()}
-            title="Minimize Hub to Companion Bar"
-            type="button"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-              picture_in_picture_alt
+          <div className={styles.roomInfo}>
+            <span className={styles.roomName} title={effectiveRoomTitle}>
+              {effectiveRoomTitle}
             </span>
-          </button>
+            <span className={styles.activeBadge}>
+              {activeStreamsCount} {activeStreamsCount === 1 ? 'Stream' : 'Streams'} Active
+            </span>
+          </div>
+        </div>
+
+        {showRoomControls && layoutMode && onSelectLayoutMode && (
+          <div
+            aria-label="Stream layout mode"
+            className={styles.layoutSwitcher}
+            data-no-drag="true"
+            role="group"
+          >
+            <button
+              aria-pressed={layoutMode === 'grid'}
+              className={`${styles.layoutPill} ${layoutMode === 'grid' ? styles.layoutPillActive : ''}`}
+              data-testid="layout-mode-grid"
+              onClick={() => onSelectLayoutMode('grid')}
+              title="Grid View"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+                grid_view
+              </span>
+              <span>Grid</span>
+            </button>
+
+            <button
+              aria-pressed={layoutMode === 'spotlight'}
+              className={`${styles.layoutPill} ${layoutMode === 'spotlight' ? styles.layoutPillActive : ''}`}
+              data-testid="layout-mode-spotlight"
+              onClick={() => onSelectLayoutMode('spotlight')}
+              title="Spotlight View"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+                view_sidebar
+              </span>
+              <span>Spotlight</span>
+            </button>
+
+            <button
+              aria-pressed={layoutMode === 'focus'}
+              className={`${styles.layoutPill} ${layoutMode === 'focus' ? styles.layoutPillActive : ''}`}
+              data-testid="layout-mode-focus"
+              onClick={() => onSelectLayoutMode('focus')}
+              title="Focus View"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+                center_focus_strong
+              </span>
+              <span>Focus</span>
+            </button>
+          </div>
         )}
 
-        <button
-          aria-label={`Edit Persona (${profile.nickname}${profile.peerTag})`}
-          className={styles.avatarWrap}
-          data-no-drag="true"
-          onClick={() => void onOpenProfile?.()}
-          title={`Edit Persona (${profile.nickname}${profile.peerTag})`}
-          type="button"
-        >
-          <div className={styles.userAvatar}>
-            <img src={profile.avatarUrl} alt={profile.nickname} className={styles.avatarImg} />
+        <div className={styles.rightSection}>
+          <div className={styles.meshBadge}>
+            <span className={`${styles.pulseDot} ${!isConnected ? styles.pulseDotIdle : ''}`} />
+            <span>{getConnectionText()}</span>
           </div>
-          <span className={styles.onlineIndicator} />
-        </button>
 
-        <div className={styles.windowActions}>
           <button
-            className={styles.winBtn}
-            onClick={() => void handleMinimizeWindow()}
-            title="Minimize Window"
+            className={styles.inviteBtn}
+            onClick={handleCopyLink}
+            title="Copy Hub Invite Code"
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-              minimize
-            </span>
+            <span className={`material-symbols-outlined ${styles.inviteIcon}`}>link</span>
+            <span className={styles.inviteText}>{effectiveRoomTitle}</span>
+            {copied && <span className={styles.copiedTag}>Copied!</span>}
           </button>
 
-          {isTauri() && (
+          {showPanelControls && peers && onTogglePanelTab && (
+            <div className={styles.panelBtnGroup}>
+              <button
+                aria-label="Toggle Participants panel"
+                aria-pressed={activePanelTab === 'participants'}
+                className={`${styles.participantsPill} ${
+                  activePanelTab === 'participants' ? styles.panelPillActive : ''
+                }`}
+                data-testid="toggle-participants-panel-btn"
+                onClick={() => onTogglePanelTab('participants')}
+                title="Participants & Room Controls"
+                type="button"
+              >
+                <span className={styles.avatarStack}>
+                  {previewPeers.length > 0 ? (
+                    previewPeers.map((peer) => (
+                      <img
+                        key={peer.peerIdSafe}
+                        src={peer.avatarUrl || ELFY_MASCOT_ICON}
+                        alt={peer.displayName}
+                        className={styles.stackAvatar}
+                      />
+                    ))
+                  ) : (
+                    <img
+                      src={profile.avatarUrl || ELFY_MASCOT_ICON}
+                      alt={profile.nickname}
+                      className={styles.stackAvatar}
+                    />
+                  )}
+                </span>
+                <span className={styles.participantsCount}>{peers.length}</span>
+              </button>
+
+              <button
+                aria-label="Toggle Telemetry & Stats panel"
+                aria-pressed={activePanelTab === 'telemetry'}
+                className={`${styles.telemetryBtn} ${
+                  activePanelTab === 'telemetry' ? styles.panelPillActive : ''
+                }`}
+                data-testid="toggle-telemetry-panel-btn"
+                onClick={() => onTogglePanelTab('telemetry')}
+                title="Telemetry & Stats"
+                type="button"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                  monitoring
+                </span>
+              </button>
+            </div>
+          )}
+
+          {onMinimizeHub && (
             <button
-              className={styles.winBtn}
-              onClick={() => void handleMaximizeWindow()}
-              title="Maximize / Restore"
+              className={styles.quickMinBtn}
+              onClick={() => void onMinimizeHub()}
+              title="Minimize Hub to Companion Bar"
               type="button"
             >
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                crop_square
+                picture_in_picture_alt
               </span>
             </button>
           )}
 
           <button
-            className={`${styles.winBtn} ${styles.winBtnClose}`}
-            onClick={() => void handleClose()}
-            title="Close Watch Room"
+            aria-label={`Edit Persona (${profile.nickname}${profile.peerTag})`}
+            className={styles.avatarWrap}
+            data-no-drag="true"
+            onClick={() => void onOpenProfile?.()}
+            title={`Edit Persona (${profile.nickname}${profile.peerTag})`}
             type="button"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-              close
-            </span>
+            <div className={styles.userAvatar}>
+              <img src={profile.avatarUrl} alt={profile.nickname} className={styles.avatarImg} />
+            </div>
+            <span className={styles.onlineIndicator} />
           </button>
+
+          <div className={styles.windowActions}>
+            <button
+              className={styles.winBtn}
+              onClick={() => void handleMinimizeWindow()}
+              title="Minimize Window"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                minimize
+              </span>
+            </button>
+
+            {isTauri() && (
+              <button
+                className={styles.winBtn}
+                onClick={() => void handleMaximizeWindow()}
+                title="Maximize / Restore"
+                type="button"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                  crop_square
+                </span>
+              </button>
+            )}
+
+            <button
+              className={`${styles.winBtn} ${styles.winBtnClose}`}
+              onClick={() => void handleClose()}
+              title="Close Watch Room"
+              type="button"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+                close
+              </span>
+            </button>
+          </div>
         </div>
-      </div>
-    </header>
+      </header>
       <DockContextMenu position={menuPosition} onClose={closeMenu} />
     </>
   );

@@ -7,6 +7,10 @@ import { toggleFullscreenTauri } from '../../utils/tauri';
 interface StreamTileProps {
   stream: StreamItem;
   isSpotlight: boolean;
+  isFocused?: boolean;
+  isHost?: boolean;
+  peerLatencyMs?: number;
+  compact?: boolean;
   onToggleSpotlight: () => void;
   onVolumeChange: (vol: number) => void;
   onToggleFullscreen?: () => void;
@@ -155,6 +159,10 @@ export const useAttachedVideoStream = (
 export const StreamTile: React.FC<StreamTileProps> = ({
   stream,
   isSpotlight,
+  isFocused = false,
+  isHost = false,
+  peerLatencyMs = 0,
+  compact = false,
   onToggleSpotlight,
   onVolumeChange,
   onToggleFullscreen,
@@ -176,10 +184,19 @@ export const StreamTile: React.FC<StreamTileProps> = ({
   };
 
   const avatarSrc = stream.avatarUrl || ELFY_MASCOT_ICON;
+  const tileClasses = [
+    styles.tile,
+    isSpotlight ? styles.spotlighted : '',
+    isFocused ? styles.focused : '',
+    compact ? styles.tileCompact : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <div
-      className={`${styles.tile} ${isSpotlight ? styles.spotlighted : ''}`}
+      className={tileClasses}
+      data-peer-id={stream.peerIdSafe}
       data-testid="stream-tile"
       onDoubleClick={() => void handleFullscreenClick()}
     >
@@ -196,6 +213,8 @@ export const StreamTile: React.FC<StreamTileProps> = ({
           <div className={styles.videoGradientOverlay} />
         )}
 
+        <div className={styles.edgeScrim} />
+
         <div className={styles.topOverlay} onDoubleClick={(e) => e.stopPropagation()}>
           <div className={styles.livePill}>
             <span className={styles.liveDot} />
@@ -206,29 +225,40 @@ export const StreamTile: React.FC<StreamTileProps> = ({
             </span>
           </div>
 
-          <div className={styles.topActions}>
-            <button
-              className={`${styles.actionBtn} ${isSpotlight ? styles.actionBtnActive : ''}`}
-              onClick={onToggleSpotlight}
-              title={isSpotlight ? 'Exit Spotlight' : 'Focus this stream'}
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                center_focus_strong
-              </span>
-            </button>
+          <div className={styles.topRightGroup}>
+            {peerLatencyMs > 0 && (
+              <div className={styles.latencyPill} title="Real-time peer RTT latency">
+                <span className={styles.latencyDot} />
+                <span>{Math.round(peerLatencyMs)}ms</span>
+              </div>
+            )}
 
-            <button
-              className={styles.actionBtn}
-              data-testid="enter-fullscreen-btn"
-              onClick={() => void handleFullscreenClick()}
-              title="Fullscreen"
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                fullscreen
-              </span>
-            </button>
+            <div className={styles.topActions}>
+              <button
+                aria-label={isSpotlight || isFocused ? 'Return to Grid' : `Focus ${stream.name}`}
+                className={`${styles.actionBtn} ${isSpotlight || isFocused ? styles.actionBtnActive : ''}`}
+                onClick={onToggleSpotlight}
+                title={isSpotlight || isFocused ? 'Return to Grid' : 'Spotlight this stream'}
+                type="button"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '17px' }}>
+                  center_focus_strong
+                </span>
+              </button>
+
+              <button
+                aria-label={`Fullscreen ${stream.name}`}
+                className={styles.actionBtn}
+                data-testid="enter-fullscreen-btn"
+                onClick={() => void handleFullscreenClick()}
+                title="Fullscreen"
+                type="button"
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: '17px' }}>
+                  fullscreen
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -239,23 +269,37 @@ export const StreamTile: React.FC<StreamTileProps> = ({
               <span className={styles.avatarDot} />
             </div>
             <span className={styles.streamerName}>{stream.name}</span>
-            <span className={styles.categoryPill}>{stream.tag}</span>
+            {isHost ? (
+              <span className={styles.hostBadge}>HOST</span>
+            ) : (
+              <span className={styles.categoryPill}>{stream.tag}</span>
+            )}
           </div>
 
           {!stream.isLocal && (
             <div className={styles.volumeWrap}>
-              <span className={`material-symbols-outlined ${styles.volumeIcon}`}>
-                {getVolumeIcon(stream.volume)}
-              </span>
-              <input
-                aria-label={`Volume for ${stream.name}`}
-                type="range"
-                min="0"
-                max="100"
-                value={stream.volume}
-                onChange={(e) => onVolumeChange(Number(e.target.value))}
-                className={styles.volumeSlider}
-              />
+              <button
+                aria-label={stream.volume === 0 ? `Unmute ${stream.name}` : `Mute ${stream.name}`}
+                className={styles.volumeBtn}
+                onClick={() => onVolumeChange(stream.volume === 0 ? 100 : 0)}
+                title={stream.volume === 0 ? 'Unmute local playback' : 'Mute local playback'}
+                type="button"
+              >
+                <span className={`material-symbols-outlined ${styles.volumeIcon}`}>
+                  {getVolumeIcon(stream.volume)}
+                </span>
+              </button>
+              {!compact && (
+                <input
+                  aria-label={`Volume for ${stream.name}`}
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={stream.volume}
+                  onChange={(e) => onVolumeChange(Number(e.target.value))}
+                  className={styles.volumeSlider}
+                />
+              )}
             </div>
           )}
         </div>

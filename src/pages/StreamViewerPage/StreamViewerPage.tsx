@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -8,6 +8,7 @@ import { ConnectionFailureBanner } from '../../components/ConnectionFailureBanne
 import { GuestKnockGate } from '../../components/GuestKnockGate/GuestKnockGate';
 import { Header } from '../../components/Header/Header';
 import { HostKnockAlert } from '../../components/HostKnockAlert/HostKnockAlert';
+import { HubSidePanelTab } from '../../components/MultiStreamHub/HubSidePanel';
 import { MultiStreamHub } from '../../components/MultiStreamHub/MultiStreamHub';
 import { RoomRole } from '../../domain/dtos';
 import { useProfile } from '../../hooks/useProfile';
@@ -51,11 +52,13 @@ export const StreamViewerPage: React.FC = () => {
   const [overrideAutoStart, setOverrideAutoStart] = useState<boolean | null>(null);
   const [overrideJoinedAs, setOverrideJoinedAs] = useState<RoomRole | null>(null);
   const [isPersonaModalOpen, setIsPersonaModalOpen] = useState(false);
+  const [activePanelTab, setActivePanelTab] = useState<HubSidePanelTab | null>(null);
 
   useEffect(() => {
     setOverrideHubSlug(null);
     setOverrideAutoStart(null);
     setOverrideJoinedAs(null);
+    setActivePanelTab(null);
   }, [urlHubId, urlAutoStart, urlJoinedAs]);
 
   useEffect(() => {
@@ -70,6 +73,7 @@ export const StreamViewerPage: React.FC = () => {
       const currentNormalized = normalizeHubTopic(sessionActionsRef.current.hubId);
       const isSameActiveHub =
         !sessionActionsRef.current.hasLeftRoom &&
+        !sessionActionsRef.current.kickedReason &&
         targetNormalized.length > 0 &&
         targetNormalized === currentNormalized &&
         (sessionActionsRef.current.role === 'owner' ||
@@ -90,6 +94,7 @@ export const StreamViewerPage: React.FC = () => {
       setOverrideHubSlug(targetNormalized && targetNormalized === urlNormalized ? null : targetHub);
       setOverrideAutoStart(Boolean(event.payload.autoStart));
       setOverrideJoinedAs(event.payload.joinedAs ?? null);
+      setActivePanelTab(null);
       sessionActionsRef.current.rejoinRoom();
       if (sessionActionsRef.current.isMinimized) {
         void sessionActionsRef.current.restoreHub();
@@ -177,6 +182,7 @@ export const StreamViewerPage: React.FC = () => {
     entranceAccepted: session.entranceAccepted,
     isSharing: session.isSharing,
     hasLeftRoom: session.hasLeftRoom,
+    kickedReason: session.kickedReason,
     isMinimized: session.isMinimized,
     rejoinRoom: session.rejoinRoom,
     restoreHub: session.restoreHub,
@@ -190,21 +196,28 @@ export const StreamViewerPage: React.FC = () => {
     entranceAccepted: session.entranceAccepted,
     isSharing: session.isSharing,
     hasLeftRoom: session.hasLeftRoom,
+    kickedReason: session.kickedReason,
     isMinimized: session.isMinimized,
     rejoinRoom: session.rejoinRoom,
     restoreHub: session.restoreHub,
     startSharing: session.startSharing,
   };
 
+  useEffect(() => {
+    if (session.kickedReason || session.hasLeftRoom || session.isMinimized) {
+      setActivePanelTab(null);
+    }
+  }, [session.hasLeftRoom, session.isMinimized, session.kickedReason]);
+
   const closingOnLeaveRef = useRef<boolean>(false);
 
-  const handleBackToFriendHubs = async (): Promise<void> => {
+  const handleBackToFriendHubs = useCallback(async (): Promise<void> => {
     if (isTauri()) {
       await closeStreamWindowTauri();
       return;
     }
     navigate('/');
-  };
+  }, [navigate]);
 
   useEffect(() => {
     if (!session.hasLeftRoom) {
@@ -214,17 +227,27 @@ export const StreamViewerPage: React.FC = () => {
     if (closingOnLeaveRef.current) return;
     closingOnLeaveRef.current = true;
     void handleBackToFriendHubs();
-  });
+  }, [handleBackToFriendHubs, session.hasLeftRoom]);
 
   const handleLeaveRoom = async (): Promise<void> => {
     closingOnLeaveRef.current = true;
+    setActivePanelTab(null);
+    session.clearKickedState();
     await session.leaveRoom();
     await handleBackToFriendHubs();
   };
 
   const handleCloseWindow = async (): Promise<void> => {
     closingOnLeaveRef.current = true;
+    setActivePanelTab(null);
+    session.clearKickedState();
     await session.leaveRoom();
+    await handleBackToFriendHubs();
+  };
+
+  const handleReturnFromKick = async (): Promise<void> => {
+    setActivePanelTab(null);
+    session.clearKickedState();
     await handleBackToFriendHubs();
   };
 
@@ -241,6 +264,10 @@ export const StreamViewerPage: React.FC = () => {
     }
     setIsPersonaModalOpen(true);
   };
+
+  const handleTogglePanelTab = useCallback((tab: HubSidePanelTab): void => {
+    setActivePanelTab((prev) => (prev === tab ? null : tab));
+  }, []);
 
   const renderMainContent = () => {
     if (isProfileLoading) {
@@ -274,6 +301,38 @@ export const StreamViewerPage: React.FC = () => {
 
     if (session.hasLeftRoom) {
       return null;
+    }
+
+    if (session.kickedReason) {
+      return (
+        <div className={styles.streamViewArea}>
+          <div
+            className={styles.kickedBannerCard}
+            data-testid="kicked-from-room-banner"
+            role="alert"
+          >
+            <div className={styles.kickedIconCircle}>
+              <span className="material-symbols-outlined" style={{ fontSize: '30px', color: 'var(--error)' }}>
+                person_remove
+              </span>
+            </div>
+            <h3>Removed from Room</h3>
+            <p>
+              You were removed from the room by the host. All stream playback and peer connections
+              have stopped.
+            </p>
+            <span className={styles.kickedReasonPill}>{session.kickedReason}</span>
+            <button
+              className={styles.primaryActionBtn}
+              data-testid="kicked-back-home-btn"
+              onClick={() => void handleReturnFromKick()}
+              type="button"
+            >
+              Back to Friend Hubs
+            </button>
+          </div>
+        </div>
+      );
     }
 
     if (session.role === 'guest' && !session.entranceAccepted) {
@@ -334,28 +393,44 @@ export const StreamViewerPage: React.FC = () => {
     return (
       <MultiStreamHub
         hubId={session.hubId}
+        localPeerIdSafe={session.localPeerIdSafe}
+        localRole={session.role}
         peers={session.peers}
         streams={session.streams}
+        streamVolumes={session.streamVolumes}
         isSharing={session.isSharing}
+        isLocalPreviewEnabled={session.isLocalPreviewEnabled}
         fps={session.fps}
+        resolution={session.resolution}
         isDeafened={session.isDeafened}
+        isConnected={session.isConnected}
         layoutMode={session.layoutMode}
         spotlightStreamId={session.spotlightStreamId}
         fullscreenStreamId={session.fullscreenStreamId}
+        activePanelTab={activePanelTab}
         systemMetrics={session.systemMetrics}
+        telemetryHistory={session.telemetryHistory}
+        peerTelemetryHistory={session.peerTelemetryHistory}
         highLoadSuggestion={session.highLoadSuggestion}
         connectionFailure={session.connectionFailure}
+        onChangePanelTab={setActivePanelTab}
+        onClosePanel={() => setActivePanelTab(null)}
         onToggleShare={session.toggleSharing}
+        onToggleLocalPreview={session.toggleLocalPreview}
         onSetFps={session.setFps}
         onToggleFps={session.toggleFps}
+        onSetResolution={session.setResolution}
+        onCycleResolution={session.cycleResolution}
         onSetStreamVolume={session.setStreamVolume}
         onToggleDeafen={session.toggleDeafen}
         onToggleLayout={session.toggleLayoutMode}
+        onSelectLayoutMode={session.setLayoutMode}
         onSelectSpotlightStream={session.selectSpotlightStream}
         onEnterFullscreen={session.enterFullscreen}
         onExitFullscreen={session.exitFullscreen}
         onMinimizeHub={session.minimizeHub}
         onLeaveHub={handleLeaveRoom}
+        onKickPeer={session.kickPeer}
         onRetryConnection={session.retryConnection}
         onDismissConnectionFailure={session.dismissConnectionFailure}
         onDismissHighLoadSuggestion={session.dismissHighLoadSuggestion}
@@ -367,6 +442,7 @@ export const StreamViewerPage: React.FC = () => {
     !isProfileLoading &&
     Boolean(activeHubSlug) &&
     !session.hasLeftRoom &&
+    !session.kickedReason &&
     !(session.role === 'guest' && !session.entranceAccepted) &&
     !session.isMinimized;
 
@@ -378,12 +454,21 @@ export const StreamViewerPage: React.FC = () => {
         activeStreamsCount={session.streams.length}
         rttMs={session.systemMetrics.rttMs}
         isConnected={session.isConnected}
-        onMinimizeHub={!session.hasLeftRoom && !session.isMinimized ? session.minimizeHub : undefined}
+        layoutMode={isMultiStreamRendered ? session.layoutMode : undefined}
+        onSelectLayoutMode={isMultiStreamRendered ? session.setLayoutMode : undefined}
+        peers={isMultiStreamRendered ? session.peers : undefined}
+        activePanelTab={isMultiStreamRendered ? activePanelTab : null}
+        onTogglePanelTab={isMultiStreamRendered ? handleTogglePanelTab : undefined}
+        onMinimizeHub={
+          !session.hasLeftRoom && !session.kickedReason && !session.isMinimized
+            ? session.minimizeHub
+            : undefined
+        }
         onCloseStream={handleCloseWindow}
         onOpenProfile={handleOpenProfile}
       />
 
-      {session.role === 'owner' && session.pendingKnocks.length > 0 && (
+      {session.role === 'owner' && !session.kickedReason && session.pendingKnocks.length > 0 && (
         <HostKnockAlert
           pendingKnocks={session.pendingKnocks}
           onAccept={session.acceptKnock}
@@ -391,7 +476,7 @@ export const StreamViewerPage: React.FC = () => {
         />
       )}
 
-      {session.connectionFailure && !isMultiStreamRendered && (
+      {session.connectionFailure && !isMultiStreamRendered && !session.kickedReason && (
         <div className={styles.pageAlertSlot}>
           <ConnectionFailureBanner
             failure={session.connectionFailure}

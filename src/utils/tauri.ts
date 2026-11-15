@@ -278,6 +278,7 @@ export const getSystemMetricsTauri = (): Promise<HostResourceMetricsDto | null> 
 };
 
 export interface KnockToastActionPayload {
+  actionId?: string;
   action: 'accept' | 'reject' | 'open';
   peerIdSafe: string;
   displayName: string;
@@ -292,6 +293,7 @@ export interface KnockNotificationRequest {
   peerIdSafe?: string;
   hubId?: string;
   replyTopic?: string;
+  messageId?: string;
 }
 
 export const showKnockNotificationTauri = async (
@@ -303,7 +305,31 @@ export const showKnockNotificationTauri = async (
     peerIdSafe: request.peerIdSafe ?? null,
     hubId: request.hubId ?? null,
     replyTopic: request.replyTopic ?? null,
+    messageId: request.messageId ?? null,
   });
+};
+
+export const registerOwnerRoomSessionTauri = async (hubId: string): Promise<void> => {
+  await safeInvoke('register_owner_room_session', { hubId });
+};
+
+export const unregisterOwnerRoomSessionTauri = async (hubId: string): Promise<void> => {
+  await safeInvoke('unregister_owner_room_session', { hubId });
+};
+
+export const consumePendingToastActionsTauri = async (
+  hubId: string
+): Promise<KnockToastActionPayload[]> => {
+  const result = await safeInvoke<KnockToastActionPayload[]>('consume_pending_toast_actions', {
+    hubId,
+  });
+  return Array.isArray(result) ? result : [];
+};
+
+export const claimToastActionTauri = async (actionId?: string): Promise<boolean> => {
+  if (!actionId || !isTauri()) return true;
+  const claimed = await safeInvoke<boolean>('claim_toast_action', { actionId });
+  return claimed !== false;
 };
 
 export const listenKnockToastActionTauri = async (

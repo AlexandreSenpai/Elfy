@@ -7,12 +7,14 @@ import {
   HubLiveState,
   LocalWindowBusMessage,
   LocalWindowBusMessageType,
+  PeerKickedPayload,
   RoomPeerDto,
   RoomRole,
   SignalingEnvelopeDto,
   SignalingMessageType,
   SignalingPayload,
   StreamFpsOption,
+  StreamResolutionPreset,
   TelemetryConsentState,
   UserProfile,
 } from './dtos';
@@ -43,7 +45,11 @@ const isBoolean = (value: unknown): value is boolean => {
 };
 
 const isStreamFps = (value: unknown): value is StreamFpsOption => {
-  return value === 30 || value === 60;
+  return value === 30 || value === 60 || value === 120;
+};
+
+export const isStreamResolutionPreset = (value: unknown): value is StreamResolutionPreset => {
+  return value === '720p' || value === '1080p' || value === 'source';
 };
 
 const isRoomRole = (value: unknown): value is RoomRole => {
@@ -153,6 +159,15 @@ const parseIceCandidateInit = (value: unknown): RTCIceCandidateInit | null => {
 
 type SignalingPayloadParser = (p: Record<string, unknown>) => SignalingPayload | null;
 
+const parsePeerKickedPayload = (p: Record<string, unknown>): PeerKickedPayload | null => {
+  if (!isNonEmptyString(p.peerIdSafe)) return null;
+  return {
+    type: 'peer_kicked',
+    peerIdSafe: p.peerIdSafe,
+    reason: isString(p.reason) ? p.reason : undefined,
+  };
+};
+
 const SIGNALING_PAYLOAD_PARSERS: Record<SignalingMessageType, SignalingPayloadParser> = {
   hub_status_request: (p) => {
     if (!isNonEmptyString(p.requesterIdSafe)) return null;
@@ -258,6 +273,7 @@ const SIGNALING_PAYLOAD_PARSERS: Record<SignalingMessageType, SignalingPayloadPa
     if (!isNonEmptyString(p.peerIdSafe)) return null;
     return { type: 'peer_left', peerIdSafe: p.peerIdSafe };
   },
+  peer_kicked: parsePeerKickedPayload,
 };
 
 /** Validates and parses a raw MQTT/BroadcastChannel signaling envelope. */
@@ -347,6 +363,7 @@ const DATA_CHANNEL_PAYLOAD_PARSERS: Record<DataChannelMessageType, DataChannelPa
     if (!isNonEmptyString(p.peerIdSafe)) return null;
     return { type: 'peer_left', peerIdSafe: p.peerIdSafe };
   },
+  peer_kicked: parsePeerKickedPayload,
   ping: (p) => {
     if (!isFiniteNumber(p.sentAt)) return null;
     return { type: 'ping', sentAt: p.sentAt };
@@ -441,6 +458,10 @@ const LOCAL_BUS_PARSERS: Record<LocalWindowBusMessageType, LocalBusParser> = {
   disconnect_hub_requested: (p) => {
     if (!isNonEmptyString(p.hubId)) return null;
     return { type: 'disconnect_hub_requested', hubId: p.hubId };
+  },
+  owner_room_status: (p) => {
+    if (!isNonEmptyString(p.hubId) || typeof p.active !== 'boolean') return null;
+    return { type: 'owner_room_status', hubId: p.hubId, active: p.active };
   },
 };
 

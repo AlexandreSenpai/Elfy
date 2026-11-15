@@ -1,0 +1,376 @@
+.panelRoot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Analysis Window Segmented Bar */
+.windowBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background-color: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  flex-shrink: 0;
+}
+
+.windowLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--on-surface-variant);
+  letter-spacing: 0.02em;
+}
+
+.segmentedGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-lowest);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.windowBtn {
+  border: none;
+  background: transparent;
+  color: var(--on-surface-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.windowBtn:hover {
+  color: var(--on-surface);
+}
+
+.windowBtnActive {
+  background-color: var(--primary);
+  color: #ffffff;
+  box-shadow: 0 0 12px rgba(255, 77, 109, 0.35);
+}
+
+/* Cards */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border-radius: var(--radius-lg);
+  background-color: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.cardTitleGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cardTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.primaryMetric {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--on-surface);
+  white-space: nowrap;
+}
+
+.metricUnit {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--on-surface-muted);
+  margin-left: 2px;
+}
+
+.chartWrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.cardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface-variant);
+}
+
+.footerStatsGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codecBadge {
+  color: var(--secondary);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Smoothness / Status Badges */
+.statusPill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  white-space: nowrap;
+}
+
+.statusGood {
+  color: #34d399;
+  background-color: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(52, 211, 153, 0.32);
+}
+
+.statusWarn {
+  color: var(--tertiary-dim);
+  background-color: rgba(227, 197, 78, 0.14);
+  border: 1px solid rgba(227, 197, 78, 0.38);
+}
+
+.statusError {
+  color: var(--error);
+  background-color: var(--error-bg);
+  border: 1px solid rgba(255, 95, 86, 0.4);
+}
+
+.statusStandby {
+  color: var(--on-surface-muted);
+  background-color: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* 2-col row for RTT Latency & Host Hardware */
+.twoColGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+@media (max-width: 340px) {
+  .twoColGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.compactCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  background-color: var(--surface-container);
+  border: 1px solid var(--outline-variant);
+  min-width: 0;
+}
+
+.compactHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
+.compactTitle {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compactFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface-muted);
+}
+
+/* Progress bars */
+.meterBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.meterLabelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface-variant);
+}
+
+.progressTrack {
+  width: 100%;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background-color: var(--surface-lowest);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width 0.25s ease;
+}
+
+.progressPrimary {
+  background: linear-gradient(90deg, var(--primary), #ff7b93);
+}
+
+.progressSecondary {
+  background: linear-gradient(90deg, var(--secondary-container), var(--secondary));
+}
+
+.progressWarn {
+  background: linear-gradient(90deg, #f59e0b, var(--error));
+}
+
+.progressGood {
+  background: linear-gradient(90deg, #059669, #34d399);
+}
+
+.encoderLine {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* DataChannel E2EE Card */
+.securityCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.1), rgba(17, 24, 34, 0.94));
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.securityLeft {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.shieldIconWrap {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background-color: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.securityMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.securityTitle {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--on-surface);
+}
+
+.securitySubtitle {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #6ee7b7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Audio Buffer & Flow */
+.audioHeaderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.audioSpecRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--on-surface);
+}
+
+.audioCodecName {
+  font-weight: 700;
+}
+
+.audioRateMono {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--secondary);
+}

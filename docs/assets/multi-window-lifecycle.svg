@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" font-family="'Plus Jakarta Sans', 'Segoe UI', system-ui, sans-serif">
+  <defs>
+    <linearGradient id="bgGrad2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14070D"/>
+      <stop offset="100%" stop-color="#220D17"/>
+    </linearGradient>
+    <marker id="arrPink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#F43F5E"/>
+    </marker>
+    <marker id="arrBlue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#38BDF8"/>
+    </marker>
+    <marker id="arrEmerald" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" fill="#10B981"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="760" rx="18" fill="url(#bgGrad2)"/>
+
+  <!-- Header -->
+  <rect x="28" y="22" width="1144" height="58" rx="12" fill="#2A111C" stroke="#5B243A"/>
+  <text x="48" y="48" fill="#FFEAF1" font-size="20" font-weight="700">Elfy — Multi-Window Tauri Lifecycle &amp; Cross-Window Communication</text>
+  <text x="48" y="68" fill="#D4A6B8" font-size="12.5">Three preloaded hidden WebViews coordinated by src-tauri/src/lib.rs, Tauri IPC events, and LocalWindowBus (or BroadcastChannel in Browser)</text>
+
+  <!-- Boot / Single Instance / Tray Bar -->
+  <rect x="28" y="96" width="1144" height="84" rx="12" fill="#1F101E" stroke="#A855F7" stroke-width="1.4"/>
+  <text x="46" y="120" fill="#E9D5FF" font-size="13" font-weight="700">APP STARTUP &amp; SYSTEM TRAY  (src-tauri/src/lib.rs :: run)</text>
+  <rect x="46" y="132" width="254" height="36" rx="7" fill="#130A14" stroke="#581C87"/>
+  <text x="58" y="154" fill="#F3E8FF" font-size="11.5">1. acquire_single_instance_lock() (temp lock)</text>
+  <rect x="314" y="132" width="234" height="36" rx="7" fill="#130A14" stroke="#581C87"/>
+  <text x="326" y="154" fill="#F3E8FF" font-size="11.5">2. init_monitor() + init_toast_aumid()</text>
+  <rect x="562" y="132" width="310" height="36" rx="7" fill="#130A14" stroke="#581C87"/>
+  <text x="574" y="154" fill="#F3E8FF" font-size="11.5">3. setup_tray(): open_elfy | quit_elfy | TrayCenter</text>
+  <rect x="886" y="132" width="268" height="36" rx="7" fill="#130A14" stroke="#581C87"/>
+  <text x="898" y="154" fill="#F3E8FF" font-size="11.5">4. Preload 3 hidden windows (tauri.conf.json)</text>
+
+  <!-- Window 1: main (Companion) -->
+  <rect x="28" y="216" width="352" height="314" rx="12" fill="#27111B" stroke="#F43F5E" stroke-width="1.8"/>
+  <rect x="28" y="216" width="352" height="36" rx="12" fill="#3A1525"/>
+  <text x="44" y="239" fill="#FFEAF1" font-size="13.5" font-weight="700">Window 1: main (Companion Hub)</text>
+  <text x="44" y="269" fill="#FF9BB3" font-size="11.5" font-weight="600">Route: index.html#/ -&gt; FriendHubsPage</text>
+  <text x="44" y="288" fill="#D4A6B8" font-size="11">- Size: 360x580 fixed, transparent, frameless</text>
+  <text x="44" y="305" fill="#D4A6B8" font-size="11">- alwaysOnTop: true | skipTaskbar: true</text>
+  <text x="44" y="322" fill="#D4A6B8" font-size="11">- Hidden at boot; tray click toggles TrayCenter</text>
+  <text x="44" y="339" fill="#D4A6B8" font-size="11">- Blur auto-hides unless drag guard active</text>
+  <text x="44" y="356" fill="#D4A6B8" font-size="11">  (MAIN_DRAG_GUARD_UNTIL_MS + cursor bounds)</text>
+  <rect x="44" y="372" width="320" height="142" rx="8" fill="#180910" stroke="#5E233C"/>
+  <text x="56" y="392" fill="#FFEAF1" font-size="12" font-weight="700">Active Responsibilities Even While Hidden</text>
+  <text x="56" y="411" fill="#FBCFE8" font-size="11">- useFriendHubsDiscovery() polls /probe</text>
+  <text x="56" y="428" fill="#FBCFE8" font-size="11">- Subscribes to owner's /knock topic</text>
+  <text x="56" y="445" fill="#FBCFE8" font-size="11">- Fires showKnockNotification() + playKnockSound()</text>
+  <text x="56" y="462" fill="#FBCFE8" font-size="11">- Handles Windows Toast Allow/Decline/Open</text>
+  <text x="56" y="479" fill="#FBCFE8" font-size="11">- Renders Minimized Hub live banner when</text>
+  <text x="56" y="495" fill="#FBCFE8" font-size="11">  minimized_hub_updated arrives</text>
+
+  <!-- Window 2: register (Persona) -->
+  <rect x="424" y="216" width="340" height="314" rx="12" fill="#251324" stroke="#C084FC" stroke-width="1.8"/>
+  <rect x="424" y="216" width="340" height="36" rx="12" fill="#361A38"/>
+  <text x="440" y="239" fill="#F5E8FF" font-size="13.5" font-weight="700">Window 2: register (Persona Modal)</text>
+  <text x="440" y="269" fill="#D8B4FE" font-size="11.5" font-weight="600">Route: index.html#/register -&gt; RegisterPage</text>
+  <text x="440" y="288" fill="#D4C2DC" font-size="11">- Size: 580x620 fixed, transparent, frameless</text>
+  <text x="440" y="305" fill="#D4C2DC" font-size="11">- alwaysOnTop: true | CloseRequested -&gt; hide()</text>
+  <text x="440" y="322" fill="#D4C2DC" font-size="11">- Auto-opened on #/ launch by App.tsx if</text>
+  <text x="440" y="339" fill="#D4C2DC" font-size="11">  !isRegistered (via show_register_window)</text>
+  <rect x="440" y="372" width="308" height="142" rx="8" fill="#180B19" stroke="#532B5E"/>
+  <text x="452" y="392" fill="#F5E8FF" font-size="12" font-weight="700">Profile &amp; Settings Flow</text>
+  <text x="452" y="411" fill="#E9D5FF" font-size="11">- ChooseNickname + 5-avatar carousel</text>
+  <text x="452" y="428" fill="#E9D5FF" font-size="11">- Locked #peer_tag (SHA-256 of machine UID)</text>
+  <text x="452" y="445" fill="#E9D5FF" font-size="11">- Saves via db_update_profile (SQLite)</text>
+  <text x="452" y="462" fill="#E9D5FF" font-size="11">- Publishes profile_updated on LocalWindowBus</text>
+  <text x="452" y="479" fill="#E9D5FF" font-size="11">- Hides via close_register_window()</text>
+  <text x="452" y="495" fill="#E9D5FF" font-size="11">  (In Browser: inline modal inside FriendHubsPage)</text>
+
+  <!-- Window 3: stream (Watch Room) -->
+  <rect x="808" y="216" width="364" height="314" rx="12" fill="#11241E" stroke="#10B981" stroke-width="1.8"/>
+  <rect x="808" y="216" width="364" height="36" rx="12" fill="#17382D"/>
+  <text x="824" y="239" fill="#ECFDF5" font-size="13.5" font-weight="700">Window 3: stream (Watch Room)</text>
+  <text x="824" y="269" fill="#6EE7B7" font-size="11.5" font-weight="600">Route: index.html#/stream -&gt; StreamViewerPage</text>
+  <text x="824" y="288" fill="#B7E4D3" font-size="11">- Size: 1280x720 (min 800x500), resizable</text>
+  <text x="824" y="305" fill="#B7E4D3" font-size="11">- frameless, opaque, CloseRequested -&gt; hide()</text>
+  <text x="824" y="322" fill="#B7E4D3" font-size="11">- Launched via open_stream_window(...)</text>
+  <text x="824" y="339" fill="#B7E4D3" font-size="11">  + Tauri event 'request-start-stream'</text>
+  <rect x="824" y="372" width="332" height="142" rx="8" fill="#0B1914" stroke="#225B47"/>
+  <text x="836" y="392" fill="#ECFDF5" font-size="12" font-weight="700">Session, Minimize &amp; Auto-Restore</text>
+  <text x="836" y="411" fill="#A7F3D0" font-size="11">- Runs useRoomSession() WebRTC + MQTT mesh</text>
+  <text x="836" y="428" fill="#A7F3D0" font-size="11">- Minimize Hub calls minimize_window() + sends</text>
+  <text x="836" y="445" fill="#A7F3D0" font-size="11">  minimized_hub_updated while WebRTC stays live</text>
+  <text x="836" y="462" fill="#A7F3D0" font-size="11">- Taskbar unminimize triggers onResized/focus</text>
+  <text x="836" y="479" fill="#A7F3D0" font-size="11">  check -&gt; publishes minimized_hub_cleared</text>
+  <text x="836" y="495" fill="#A7F3D0" font-size="11">- Leave Room calls close_stream_window()</text>
+
+  <!-- Navigation Arrows between Windows -->
+  <line x1="380" y1="295" x2="422" y2="295" stroke="#C084FC" stroke-width="2" marker-end="url(#arrPink)"/>
+  <text x="401" y="286" text-anchor="middle" fill="#D8B4FE" font-size="10">Edit</text>
+  <line x1="422" y1="322" x2="380" y2="322" stroke="#F43F5E" stroke-width="2" marker-end="url(#arrPink)"/>
+  <text x="401" y="337" text-anchor="middle" fill="#FF9BB3" font-size="10">Save</text>
+
+  <!-- Arrow from Main to Stream across top corridor -->
+  <path d="M 204 216 L 204 202 L 990 202 L 990 214" fill="none" stroke="#10B981" stroke-width="2" marker-end="url(#arrEmerald)"/>
+  <text x="594" y="195" text-anchor="middle" fill="#6EE7B7" font-size="11" font-weight="600">open_stream_window -&gt; 'request-start-stream' (Open Room / Watch Hub)</text>
+
+  <!-- Bottom Cross-Window Event Bus Panel -->
+  <rect x="28" y="556" width="1144" height="176" rx="12" fill="#13222F" stroke="#38BDF8" stroke-width="1.5"/>
+  <text x="48" y="582" fill="#7DD3FC" font-size="13.5" font-weight="700">CROSS-WINDOW MESSAGE BUS  (src/adapters/localWindowBus.ts)</text>
+  <text x="48" y="601" fill="#BAE6FD" font-size="11.5">Tauri Runtime: @tauri-apps/api/event emit/listen('elfy:local-window-bus')   |   Browser / Playwright: BroadcastChannel('elfy_local_window_bus') scoped by sessionStorage.elfy_test_machine_uid</text>
+
+  <rect x="48" y="616" width="210" height="98" rx="8" fill="#0B1620" stroke="#255473"/>
+  <text x="60" y="636" fill="#E0F2FE" font-size="11.5" font-weight="700">profile_updated</text>
+  <text x="60" y="655" fill="#93C5FD" font-size="10.5">register -&gt; main &amp; stream</text>
+  <text x="60" y="672" fill="#93C5FD" font-size="10.5">Refreshes avatar/nickname</text>
+  <text x="60" y="689" fill="#93C5FD" font-size="10.5">+ triggers peer_profile_</text>
+  <text x="60" y="703" fill="#93C5FD" font-size="10.5">updated DataChannel sync</text>
+
+  <rect x="272" y="616" width="210" height="98" rx="8" fill="#0B1620" stroke="#255473"/>
+  <text x="284" y="636" fill="#E0F2FE" font-size="11.5" font-weight="700">minimized_hub_updated</text>
+  <text x="284" y="655" fill="#93C5FD" font-size="10.5">stream -&gt; main</text>
+  <text x="284" y="672" fill="#93C5FD" font-size="10.5">Displays live Watch Room</text>
+  <text x="284" y="689" fill="#93C5FD" font-size="10.5">banner inside FriendHubs</text>
+  <text x="284" y="703" fill="#93C5FD" font-size="10.5">(streams count + sharing)</text>
+
+  <rect x="496" y="616" width="210" height="98" rx="8" fill="#0B1620" stroke="#255473"/>
+  <text x="508" y="636" fill="#E0F2FE" font-size="11.5" font-weight="700">minimized_hub_cleared</text>
+  <text x="508" y="655" fill="#93C5FD" font-size="10.5">stream -&gt; main</text>
+  <text x="508" y="672" fill="#93C5FD" font-size="10.5">Dismisses banner when</text>
+  <text x="508" y="689" fill="#93C5FD" font-size="10.5">stream window restores or</text>
+  <text x="508" y="703" fill="#93C5FD" font-size="10.5">leaves active hub session</text>
+
+  <rect x="720" y="616" width="210" height="98" rx="8" fill="#0B1620" stroke="#255473"/>
+  <text x="732" y="636" fill="#E0F2FE" font-size="11.5" font-weight="700">restore_hub_requested</text>
+  <text x="732" y="655" fill="#93C5FD" font-size="10.5">main -&gt; stream</text>
+  <text x="732" y="672" fill="#93C5FD" font-size="10.5">Triggered by banner button;</text>
+  <text x="732" y="689" fill="#93C5FD" font-size="10.5">calls restore_stream_window()</text>
+  <text x="732" y="703" fill="#93C5FD" font-size="10.5">&amp; exits minimized UI</text>
+
+  <rect x="944" y="616" width="208" height="98" rx="8" fill="#0B1620" stroke="#255473"/>
+  <text x="956" y="636" fill="#E0F2FE" font-size="11.5" font-weight="700">disconnect_hub_requested</text>
+  <text x="956" y="655" fill="#93C5FD" font-size="10.5">main -&gt; stream</text>
+  <text x="956" y="672" fill="#93C5FD" font-size="10.5">Triggered from banner</text>
+  <text x="956" y="689" fill="#93C5FD" font-size="10.5">Disconnect CTA; closes room</text>
+  <text x="956" y="703" fill="#93C5FD" font-size="10.5">&amp; clears minimized state</text>
+
+  <!-- Vertical connectors to bus -->
+  <line x1="204" y1="530" x2="204" y2="554" stroke="#38BDF8" stroke-width="2" marker-start="url(#arrBlue)" marker-end="url(#arrBlue)"/>
+  <line x1="594" y1="530" x2="594" y2="554" stroke="#38BDF8" stroke-width="2" marker-start="url(#arrBlue)" marker-end="url(#arrBlue)"/>
+  <line x1="990" y1="530" x2="990" y2="554" stroke="#38BDF8" stroke-width="2" marker-start="url(#arrBlue)" marker-end="url(#arrBlue)"/>
+</svg>

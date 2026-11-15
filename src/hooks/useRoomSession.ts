@@ -1,42 +1,34 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   localWindowBus,
   signalingTransport,
-  storageRepository,
-  systemMonitorAdapter,
   telemetryAdapter,
   webrtcStreamEngine,
 } from '../adapters';
-import { ROOM_CONFIG, STREAM_CONFIG } from '../domain/config';
 import {
   ConnectionFailureDto,
-  DataChannelEnvelopeDto,
-  DataChannelMessageType,
+  DataChannelPayload,
   HubStatusResponsePayload,
-  KnockDecisionPayload,
-  KnockRequestPayload,
   KnockStatus,
   LocalWindowBusMessage,
   LocalWindowBusMessageType,
+  PeerTelemetryHistoryPointDto,
   PendingKnock,
   RoomPeerDto,
   RoomRole,
   SignalingEnvelopeDto,
   SignalingMessageType,
-  SignalingPayload,
   StreamFpsOption,
   StreamItem,
-  StreamStartedPayload,
+  StreamResolutionPreset,
   SystemMetricsDto,
+  TelemetryHistoryPointDto,
   UserProfile,
   WatchLayoutMode,
 } from '../domain/dtos';
-import { DEFAULT_USER_PROFILE } from '../data/mockData';
-import { canAcceptMorePeers } from '../domain/validators';
-import { StreamEngineCallbacks } from '../ports';
+import { STREAM_CONFIG } from '../domain/config';
 import {
   extractHostFromHub,
-  formatFullPeerTag,
   getGuestInboxTopic,
   getKnockTopic,
   getProbeTopic,
@@ -44,14 +36,17 @@ import {
   normalizeHubTopic,
   toSafePeerTag,
 } from '../utils/hubTopics';
-import { playKnockSound, showKnockNotification } from '../utils/notifications';
 import {
-  KnockToastActionPayload,
-  listenKnockToastActionTauri,
-  minimizeWindowTauri,
-  restoreStreamWindowTauri,
-  setFullscreenTauri,
-} from '../utils/tauri';
+  BusHandler,
+  SignalingHandler,
+  createSelfPeer,
+  createSignalingEnvelope,
+  isWaitingForDefaultProfile,
+} from './room/roomHelpers';
+import { useKnockGate } from './useKnockGate';
+import { useMediaSharing } from './useMediaSharing';
+import { useMeshPeers } from './useMeshPeers';
+import { useRoomMetrics } from './useRoomMetrics';
 
 export interface UseRoomSessionOptions {
   hubId: string;
@@ -64,9 +59,11 @@ export interface UseRoomSessionOptions {
 export interface UseRoomSessionResult {
   hubId: string;
   role: RoomRole;
+  localPeerIdSafe: string;
   hostInfo: { displayName: string; tag: string };
   isConnected: boolean;
   hasLeftRoom: boolean;
+  kickedReason: string | null;
   knockStatus: KnockStatus;
   knockError: string | null;
   entranceAccepted: boolean;
@@ -75,24 +72,35 @@ export interface UseRoomSessionResult {
   streams: StreamItem[];
   localStream: MediaStream | null;
   isSharing: boolean;
+  isLocalPreviewEnabled: boolean;
   fps: StreamFpsOption;
+  resolution: StreamResolutionPreset;
   isDeafened: boolean;
+  streamVolumes: Record<string, number>;
   layoutMode: WatchLayoutMode;
   spotlightStreamId: string | null;
   fullscreenStreamId: string | null;
   isMinimized: boolean;
   systemMetrics: SystemMetricsDto;
+  telemetryHistory: TelemetryHistoryPointDto[];
+  peerTelemetryHistory: Record<string, PeerTelemetryHistoryPointDto[]>;
   highLoadSuggestion: string | null;
   connectionFailure: ConnectionFailureDto | null;
   requestEntrance: () => Promise<void>;
   cancelKnock: () => void;
   acceptKnock: (knock: PendingKnock) => Promise<void>;
   rejectKnock: (knock: PendingKnock) => Promise<void>;
+  kickPeer: (targetPeerIdSafe: string, reason?: string) => Promise<void>;
+  clearKickedState: () => void;
   startSharing: () => Promise<void>;
   stopSharing: () => Promise<void>;
   toggleSharing: () => Promise<void>;
+  toggleLocalPreview: () => void;
+  setLocalPreviewEnabled: (enabled: boolean) => void;
   setFps: (fps: StreamFpsOption) => Promise<void>;
   toggleFps: () => Promise<void>;
+  setResolution: (resolution: StreamResolutionPreset) => Promise<void>;
+  cycleResolution: () => Promise<void>;
   setStreamVolume: (streamId: string, volume: number) => void;
   toggleDeafen: () => void;
   setLayoutMode: (mode: WatchLayoutMode) => void;
@@ -109,112 +117,9 @@ export interface UseRoomSessionResult {
   dismissHighLoadSuggestion: () => void;
 }
 
-interface RemoteStreamMeta {
-  resolution: string;
-  fps: StreamFpsOption;
-  displayName?: string;
-  avatarUrl?: string;
-}
-
-const KNOCK_TIMEOUT_MS = 30000;
-const METRICS_POLL_MS = 2000;
-
-const EMPTY_METRICS: SystemMetricsDto = {
-  cpuUsagePercent: 0,
-  memoryUsedMb: 0,
-  memoryTotalMb: 0,
-  highLoadWarning: false,
-  outboundFps: 0,
-  inboundFps: 0,
-  droppedFrames: 0,
-  rttMs: 0,
-};
-
-const createUniqueId = (prefix: string): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}_${crypto.randomUUID()}`;
-  }
-  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-};
-
-const toPeerCountTier = (count: number): string => {
-  if (count <= 1) return '1';
-  if (count <= 3) return '2-3';
-  return '4+';
-};
-
-const toCpuTier = (cpu: number): string => {
-  if (cpu >= 80) return 'high';
-  if (cpu >= 50) return 'medium';
-  return 'low';
-};
-
-const toRamTier = (usedMb: number, totalMb: number): string => {
-  if (totalMb <= 0) return 'unknown';
-  const ratio = usedMb / totalMb;
-  if (ratio >= 0.85) return 'high';
-  if (ratio >= 0.6) return 'medium';
-  return 'low';
-};
-
-const toRttBucket = (rttMs: number): string => {
-  if (rttMs <= 0) return 'unknown';
-  if (rttMs < 25) return '0-25ms';
-  if (rttMs < 60) return '25-60ms';
-  return '60ms+';
-};
-
-const isWaitingForDefaultProfile = (options: UseRoomSessionOptions): boolean => {
-  if (options.isProfileLoading !== undefined) {
-    return options.isProfileLoading;
-  }
-  if (options.profile.machineHash) return false;
-  return (
-    options.profile.peerTag === DEFAULT_USER_PROFILE.peerTag &&
-    options.profile.nickname === DEFAULT_USER_PROFILE.nickname
-  );
-};
-
-const createSignalingEnvelope = <T extends SignalingPayload>(
-  hubId: string,
-  senderPeerIdSafe: string,
-  payload: T
-): SignalingEnvelopeDto<T> => ({
-  version: 1,
-  messageId: createUniqueId('msg'),
-  hubId,
-  senderPeerIdSafe,
-  sentAt: Date.now(),
-  payload,
-});
-
-const createSelfPeer = (
-  profile: UserProfile,
-  peerIdSafe: string,
-  role: RoomRole,
-  isStreaming: boolean
-): RoomPeerDto => ({
-  peerIdSafe,
-  peerTag: formatFullPeerTag(profile.nickname, profile.peerTag),
-  displayName: profile.nickname,
-  avatarUrl: profile.avatarUrl,
-  role,
-  isStreaming,
-  joinedAt: Date.now(),
-});
-
-const getMeshTokenForPair = (hubId: string, peerA: string, peerB: string): string => {
-  const ordered = [peerA, peerB].sort().join('__');
-  return `mesh_${hubId}_${ordered}`;
-};
-
-type SignalingHandler = (envelope: SignalingEnvelopeDto) => Promise<void> | void;
-type DataChannelHandler = (peerIdSafe: string, envelope: DataChannelEnvelopeDto) => void;
-type BusHandler = (message: LocalWindowBusMessage) => void;
-
 /**
- * Unified bidirectional room session hook managing knocking, discovery probe responses,
- * WebRTC + RTCDataChannel lifecycle, layout/fullscreen/minimize controls, and telemetry.
+ * Orchestrates a room session by composing media sharing, WebRTC mesh peers,
+ * knock admission/toast gating, system metrics polling, and MQTT lifecycle.
  */
 export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionResult => {
   const normalizedHub = normalizeHubTopic(options.hubId);
@@ -222,34 +127,18 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     options.role ?? (isHubOwner(options.hubId, options.profile) ? 'owner' : 'guest');
   const localPeerIdSafe = toSafePeerTag(options.profile.nickname, options.profile.peerTag);
   const hostInfo = extractHostFromHub(normalizedHub || options.hubId);
-  const waitingForProfile = isWaitingForDefaultProfile(options);
+  const waitingForProfile = isWaitingForDefaultProfile(
+    options.profile,
+    options.isProfileLoading
+  );
 
   const [isConnected, setIsConnected] = useState<boolean>(signalingTransport.isConnected);
   const [hasLeftRoom, setHasLeftRoom] = useState<boolean>(false);
+  const [kickedReason, setKickedReason] = useState<string | null>(null);
+  const [isRoomReady, setIsRoomReady] = useState<boolean>(false);
   const [sessionNonce, setSessionNonce] = useState<number>(0);
-  const [knockStatus, setKnockStatus] = useState<KnockStatus>(
-    resolvedRole === 'owner' ? 'accepted' : 'knocking'
-  );
-  const [knockError, setKnockError] = useState<string | null>(null);
-  const [entranceAccepted, setEntranceAccepted] = useState<boolean>(resolvedRole === 'owner');
-  const [pendingKnocks, setPendingKnocks] = useState<PendingKnock[]>([]);
-  const [peers, setPeers] = useState<RoomPeerDto[]>([]);
-  const [streams, setStreams] = useState<StreamItem[]>([]);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [isSharing, setIsSharing] = useState<boolean>(false);
-  const [fps, setFpsState] = useState<StreamFpsOption>(
-    options.profile.preferredFps ?? STREAM_CONFIG.DEFAULT_FPS
-  );
-  const [isDeafened, setIsDeafened] = useState<boolean>(false);
-  const [layoutMode, setLayoutModeState] = useState<WatchLayoutMode>('grid');
-  const [spotlightStreamId, setSpotlightStreamId] = useState<string | null>(null);
-  const [fullscreenStreamId, setFullscreenStreamId] = useState<string | null>(null);
-  const [isMinimized, setIsMinimized] = useState<boolean>(false);
-  const [systemMetrics, setSystemMetrics] = useState<SystemMetricsDto>(EMPTY_METRICS);
-  const [highLoadSuggestion, setHighLoadSuggestion] = useState<string | null>(null);
   const [connectionFailure, setConnectionFailure] = useState<ConnectionFailureDto | null>(null);
 
-  // Refs keep signaling and WebRTC callbacks decoupled from React render churn.
   const mountedRef = useRef<boolean>(true);
   const profileRef = useRef<UserProfile>(options.profile);
   profileRef.current = options.profile;
@@ -262,34 +151,7 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
   const hostInfoRef = useRef(hostInfo);
   hostInfoRef.current = hostInfo;
 
-  const peersRef = useRef<RoomPeerDto[]>([]);
-  const pendingKnocksRef = useRef<PendingKnock[]>([]);
-  pendingKnocksRef.current = pendingKnocks;
-  const streamsRef = useRef<StreamItem[]>([]);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const isSharingRef = useRef<boolean>(false);
-  const fpsRef = useRef<StreamFpsOption>(fps);
-  const isDeafenedRef = useRef<boolean>(false);
-  const isMinimizedRef = useRef<boolean>(false);
-  const entranceAcceptedRef = useRef<boolean>(resolvedRole === 'owner');
-  const sessionTokenRef = useRef<string>('');
-  const hostPeerIdRef = useRef<string>('');
-  const preFullscreenLayoutRef = useRef<'grid' | 'spotlight'>('grid');
   const hasAutoStartedRef = useRef<boolean>(false);
-  const isChangingFpsRef = useRef<boolean>(false);
-  const lastHighLoadRef = useRef<boolean>(false);
-  const highLoadDismissedRef = useRef<boolean>(false);
-  const dcRttRef = useRef<number>(0);
-
-  const remoteStreamsRef = useRef<Map<string, MediaStream>>(new Map());
-  const remoteMetaRef = useRef<Map<string, RemoteStreamMeta>>(new Map());
-  const streamVolumesRef = useRef<Map<string, number>>(new Map());
-  const knockReplyTopicsRef = useRef<Map<string, string>>(new Map());
-  const peerTokensRef = useRef<Map<string, string>>(new Map());
-  const knockTimerRef = useRef<number | null>(null);
-  const hostOfferTimerRef = useRef<number | null>(null);
-  const transientKnockUnsubRef = useRef<(() => void) | null>(null);
-  const pendingPreAcceptSignalsRef = useRef<SignalingEnvelopeDto[]>([]);
   const roomUnsubsRef = useRef<Array<() => void>>([]);
 
   useEffect(() => {
@@ -301,448 +163,227 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
 
   useEffect(() => {
     setHasLeftRoom(false);
-    setIsMinimized(false);
-    isMinimizedRef.current = false;
+    setKickedReason(null);
+    setIsRoomReady(false);
     hasAutoStartedRef.current = false;
-    pendingPreAcceptSignalsRef.current = [];
   }, [normalizedHub]);
 
-  const clearKnockTimer = useCallback((): void => {
-    if (knockTimerRef.current === null) return;
-    window.clearTimeout(knockTimerRef.current);
-    knockTimerRef.current = null;
-  }, []);
+  // Ref bridges allow focused child hooks to collaborate without circular render deps.
+  const meshBridgeRef = useRef<{
+    getPeersSnapshot: () => RoomPeerDto[];
+    getHostPeerId: () => string;
+    setPeerStreamingFlag: (peerIdSafe: string, streaming: boolean) => void;
+    broadcastRoomDataChannel: (payload: DataChannelPayload) => void;
+  }>({
+    getPeersSnapshot: () => [],
+    getHostPeerId: () => '',
+    setPeerStreamingFlag: () => {},
+    broadcastRoomDataChannel: () => {},
+  });
 
-  const buildRemoteStreamItem = useCallback(
-    (peerIdSafe: string, mediaStream: MediaStream): StreamItem => {
-      const peer = peersRef.current.find((item) => item.peerIdSafe === peerIdSafe);
-      const meta = remoteMetaRef.current.get(peerIdSafe);
-      const savedVol = streamVolumesRef.current.get(peerIdSafe) ?? 100;
-      const fallbackTag =
-        peerIdSafe === hostPeerIdRef.current
-          ? formatFullPeerTag(hostInfoRef.current.displayName, hostInfoRef.current.tag)
-          : peerIdSafe;
+  const knockBridgeRef = useRef<{
+    isEntranceAccepted: () => boolean;
+    onHostLeftRoom: () => void;
+    detachTransientKnockSub: () => void;
+  }>({
+    isEntranceAccepted: () => resolvedRole === 'owner',
+    onHostLeftRoom: () => {},
+    detachTransientKnockSub: () => {},
+  });
 
-      return {
-        id: peerIdSafe,
-        peerIdSafe,
-        name: peer?.displayName || meta?.displayName || hostInfoRef.current.displayName || 'Peer',
-        tag: peer?.peerTag || fallbackTag,
-        resolution: meta?.resolution || STREAM_CONFIG.DEFAULT_RESOLUTION,
-        fps: meta?.fps ?? STREAM_CONFIG.DEFAULT_FPS,
-        avatarUrl: peer?.avatarUrl || meta?.avatarUrl || '',
-        isLive: true,
-        volume: isDeafenedRef.current ? 0 : savedVol,
-        isLocal: false,
-        mediaStream,
-      };
-    },
-    []
-  );
+  const kickedBridgeRef = useRef<(reason?: string) => void>(() => {});
 
-  const syncMinimizedBanner = useCallback((activeStreamsCount: number): void => {
-    if (!isMinimizedRef.current || !hubRef.current) return;
-    void localWindowBus.publish({
-      type: 'minimized_hub_updated',
-      hub: {
-        hubId: hubRef.current,
-        role: roleRef.current,
-        activeStreamsCount,
-        isSharing: isSharingRef.current,
-        minimizedAt: Date.now(),
-      },
-    });
-  }, []);
-
-  const rebuildStreams = useCallback((): void => {
-    const next: StreamItem[] = [];
-    const currentLocal = localStreamRef.current;
-
-    if (currentLocal && isSharingRef.current) {
-      const selfId = localPeerIdRef.current;
-      next.push({
-        id: selfId,
-        peerIdSafe: selfId,
-        name: profileRef.current.nickname,
-        tag: formatFullPeerTag(profileRef.current.nickname, profileRef.current.peerTag),
-        resolution: STREAM_CONFIG.DEFAULT_RESOLUTION,
-        fps: fpsRef.current,
-        avatarUrl: profileRef.current.avatarUrl,
-        isLive: true,
-        volume: streamVolumesRef.current.get(selfId) ?? 100,
-        isLocal: true,
-        mediaStream: currentLocal,
-      });
-    }
-
-    for (const [peerIdSafe, mediaStream] of remoteStreamsRef.current.entries()) {
-      next.push(buildRemoteStreamItem(peerIdSafe, mediaStream));
-    }
-
-    streamsRef.current = next;
-    syncMinimizedBanner(next.length);
-    if (!mountedRef.current) return;
-
-    const activeIds = new Set(next.map((item) => item.id));
-    setStreams(next);
-    setSpotlightStreamId((prev) => (prev && activeIds.has(prev) ? prev : null));
-    setFullscreenStreamId((prev) => (prev && activeIds.has(prev) ? prev : null));
-  }, [buildRemoteStreamItem, syncMinimizedBanner]);
-
-  const updatePeersList = useCallback(
-    (updater: (prev: RoomPeerDto[]) => RoomPeerDto[]): RoomPeerDto[] => {
-      const next = updater(peersRef.current);
-      peersRef.current = next;
-      if (mountedRef.current) setPeers(next);
-      return next;
-    },
-    []
-  );
-
-  const setPeerStreamingFlag = useCallback(
-    (peerIdSafe: string, streaming: boolean): void => {
-      updatePeersList((prev) =>
-        prev.map((peer) =>
-          peer.peerIdSafe === peerIdSafe ? { ...peer, isStreaming: streaming } : peer
-        )
-      );
-    },
-    [updatePeersList]
-  );
-
-  const broadcastRoomDataChannel = useCallback(
-    (payload: Parameters<typeof webrtcStreamEngine.broadcastDataChannelMessage>[0]): void => {
-      const fallbackToken = sessionTokenRef.current || 'room-session';
-      webrtcStreamEngine.broadcastDataChannelMessage(payload, fallbackToken);
-    },
-    []
-  );
-
-  const handleLocalTrackEnded = useCallback(
-    (event?: Event): void => {
-      if (!isSharingRef.current || isChangingFpsRef.current) return;
-      const currentTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (event?.target && currentTrack && event.target !== currentTrack) return;
-
-      localStreamRef.current = null;
-      isSharingRef.current = false;
-      if (mountedRef.current) {
-        setLocalStream(null);
-        setIsSharing(false);
-      }
-      setPeerStreamingFlag(localPeerIdRef.current, false);
-      broadcastRoomDataChannel({ type: 'stream_stopped', peerIdSafe: localPeerIdRef.current });
-      void webrtcStreamEngine.renegotiateAllPeers();
-      rebuildStreams();
-    },
-    [broadcastRoomDataChannel, rebuildStreams, setPeerStreamingFlag]
-  );
-
-  const startSharing = useCallback(async (): Promise<void> => {
-    if (isSharingRef.current) return;
-    try {
-      const targetFps = fpsRef.current;
-      const stream = await webrtcStreamEngine.startScreenCapture(targetFps);
-      if (!mountedRef.current) {
-        await webrtcStreamEngine.stopScreenCapture();
-        return;
-      }
-
-      localStreamRef.current = stream;
-      isSharingRef.current = true;
-      setLocalStream(stream);
-      setIsSharing(true);
+  const handleCaptureError = useCallback((failure: ConnectionFailureDto | null): void => {
+    if (failure === null) {
       setConnectionFailure((prev) => (prev?.stage === 'screen_capture' ? null : prev));
-
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.addEventListener('ended', handleLocalTrackEnded, { once: true });
-      }
-
-      setPeerStreamingFlag(localPeerIdRef.current, true);
-      rebuildStreams();
-
-      const startedPayload: StreamStartedPayload = {
-        type: 'stream_started',
-        peerIdSafe: localPeerIdRef.current,
-        displayName: profileRef.current.nickname,
-        avatarUrl: profileRef.current.avatarUrl,
-        resolution: STREAM_CONFIG.DEFAULT_RESOLUTION,
-        fps: targetFps,
-      };
-
-      broadcastRoomDataChannel(startedPayload);
-      await webrtcStreamEngine.renegotiateAllPeers();
-
-      void telemetryAdapter.trackEvent('stream_started', {
-        role: roleRef.current,
-        fps: targetFps,
-        peerCountTier: toPeerCountTier(peersRef.current.length),
-      });
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setConnectionFailure({
-        stage: 'screen_capture',
-        reason:
-          err instanceof Error && err.message
-            ? err.message
-            : 'Unable to start screen capture.',
-        timestamp: Date.now(),
-      });
-    }
-  }, [broadcastRoomDataChannel, handleLocalTrackEnded, rebuildStreams, setPeerStreamingFlag]);
-
-  const stopSharing = useCallback(async (): Promise<void> => {
-    if (!isSharingRef.current && !localStreamRef.current) return;
-    const oldTrack = localStreamRef.current?.getVideoTracks()[0];
-    if (oldTrack) {
-      oldTrack.removeEventListener('ended', handleLocalTrackEnded);
-    }
-
-    localStreamRef.current = null;
-    isSharingRef.current = false;
-    if (mountedRef.current) {
-      setLocalStream(null);
-      setIsSharing(false);
-    }
-
-    await webrtcStreamEngine.stopScreenCapture();
-    setPeerStreamingFlag(localPeerIdRef.current, false);
-    rebuildStreams();
-
-    broadcastRoomDataChannel({ type: 'stream_stopped', peerIdSafe: localPeerIdRef.current });
-    await webrtcStreamEngine.renegotiateAllPeers();
-
-    void telemetryAdapter.trackEvent('stream_stopped', {
-      role: roleRef.current,
-      fps: fpsRef.current,
-      peerCountTier: toPeerCountTier(peersRef.current.length),
-    });
-  }, [broadcastRoomDataChannel, handleLocalTrackEnded, rebuildStreams, setPeerStreamingFlag]);
-
-  const toggleSharing = useCallback(async (): Promise<void> => {
-    if (isSharingRef.current) {
-      await stopSharing();
       return;
     }
-    await startSharing();
-  }, [startSharing, stopSharing]);
+    setConnectionFailure(failure);
+  }, []);
 
-  const setFps = useCallback(
-    async (nextFps: StreamFpsOption): Promise<void> => {
-      fpsRef.current = nextFps;
-      if (mountedRef.current) setFpsState(nextFps);
-
-      const previousTrack = localStreamRef.current?.getVideoTracks()[0];
-      isChangingFpsRef.current = true;
-      try {
-        await webrtcStreamEngine.setStreamFps(nextFps);
-      } finally {
-        isChangingFpsRef.current = false;
-      }
-
-      const refreshedLocal = webrtcStreamEngine.getLocalStream();
-      if (refreshedLocal) {
-        localStreamRef.current = refreshedLocal;
-        const nextTrack = refreshedLocal.getVideoTracks()[0];
-        if (nextTrack && nextTrack !== previousTrack) {
-          previousTrack?.removeEventListener('ended', handleLocalTrackEnded);
-          nextTrack.addEventListener('ended', handleLocalTrackEnded, { once: true });
-        }
-        if (mountedRef.current) setLocalStream(refreshedLocal);
-      }
-
-      if (isSharingRef.current) {
-        broadcastRoomDataChannel({
-          type: 'stream_started',
-          peerIdSafe: localPeerIdRef.current,
-          displayName: profileRef.current.nickname,
-          avatarUrl: profileRef.current.avatarUrl,
-          resolution: STREAM_CONFIG.DEFAULT_RESOLUTION,
-          fps: nextFps,
-        });
-      }
-
-      rebuildStreams();
-      void telemetryAdapter.trackEvent('fps_changed', { role: roleRef.current, fps: nextFps });
-    },
-    [broadcastRoomDataChannel, handleLocalTrackEnded, rebuildStreams]
+  const bridgeGetPeersSnapshot = useCallback(
+    () => meshBridgeRef.current.getPeersSnapshot(),
+    []
+  );
+  const bridgeGetHostPeerId = useCallback(
+    () => meshBridgeRef.current.getHostPeerId(),
+    []
+  );
+  const bridgeSetPeerStreamingFlag = useCallback(
+    (peerIdSafe: string, streaming: boolean) =>
+      meshBridgeRef.current.setPeerStreamingFlag(peerIdSafe, streaming),
+    []
+  );
+  const bridgeBroadcastRoomDataChannel = useCallback(
+    (payload: DataChannelPayload) => meshBridgeRef.current.broadcastRoomDataChannel(payload),
+    []
+  );
+  const bridgeIsEntranceAccepted = useCallback(
+    () => knockBridgeRef.current.isEntranceAccepted(),
+    []
+  );
+  const bridgeOnHostLeftRoom = useCallback(
+    () => knockBridgeRef.current.onHostLeftRoom(),
+    []
+  );
+  const bridgeDetachTransientKnockSub = useCallback(
+    () => knockBridgeRef.current.detachTransientKnockSub(),
+    []
+  );
+  const bridgeOnKickedFromRoom = useCallback(
+    (reason?: string) => kickedBridgeRef.current(reason),
+    []
   );
 
-  const toggleFps = useCallback(async (): Promise<void> => {
-    const next: StreamFpsOption =
-      fpsRef.current === STREAM_CONFIG.DEFAULT_FPS
-        ? STREAM_CONFIG.FALLBACK_FPS
-        : STREAM_CONFIG.DEFAULT_FPS;
-    await setFps(next);
-  }, [setFps]);
+  const media = useMediaSharing({
+    normalizedHub,
+    initialFps: options.profile.preferredFps ?? STREAM_CONFIG.DEFAULT_FPS,
+    mountedRef,
+    profileRef,
+    roleRef,
+    hubRef,
+    localPeerIdRef,
+    hostInfoRef,
+    getPeersSnapshot: bridgeGetPeersSnapshot,
+    getHostPeerId: bridgeGetHostPeerId,
+    onPeerStreamingChanged: bridgeSetPeerStreamingFlag,
+    onBroadcastDataChannel: bridgeBroadcastRoomDataChannel,
+    onCaptureError: handleCaptureError,
+  });
 
-  const setStreamVolume = useCallback(
-    (streamId: string, volume: number): void => {
-      const clamped = Math.max(0, Math.min(100, Math.round(volume)));
-      streamVolumesRef.current.set(streamId, clamped);
-      rebuildStreams();
-    },
-    [rebuildStreams]
+  const metrics = useRoomMetrics({
+    normalizedHub,
+    hasLeftRoom: hasLeftRoom || Boolean(kickedReason),
+    mountedRef,
+    roleRef,
+    fpsRef: media.fpsRef,
+    resolutionRef: media.resolutionRef,
+  });
+
+  const meshMediaBridge = useMemo(
+    () => ({
+      isSharingRef: media.isSharingRef,
+      fpsRef: media.fpsRef,
+      resolutionRef: media.resolutionRef,
+      remoteStreamsRef: media.remoteStreamsRef,
+      remoteMetaRef: media.remoteMetaRef,
+      rebuildStreams: media.rebuildStreams,
+    }),
+    [
+      media.fpsRef,
+      media.isSharingRef,
+      media.rebuildStreams,
+      media.remoteMetaRef,
+      media.remoteStreamsRef,
+      media.resolutionRef,
+    ]
   );
 
-  const toggleDeafen = useCallback((): void => {
-    const next = !isDeafenedRef.current;
-    isDeafenedRef.current = next;
-    setIsDeafened(next);
-    rebuildStreams();
-  }, [rebuildStreams]);
+  const mesh = useMeshPeers({
+    normalizedHub,
+    hasLeftRoom,
+    waitingForProfile,
+    profile: options.profile,
+    mountedRef,
+    profileRef,
+    roleRef,
+    hubRef,
+    localPeerIdRef,
+    hostInfoRef,
+    setConnectionFailure,
+    media: meshMediaBridge,
+    onPongRtt: metrics.recordPongRtt,
+    isEntranceAccepted: bridgeIsEntranceAccepted,
+    onHostLeftRoom: bridgeOnHostLeftRoom,
+    onConnectedToHost: bridgeDetachTransientKnockSub,
+    onKickedFromRoom: bridgeOnKickedFromRoom,
+  });
 
-  const setLayoutMode = useCallback((mode: WatchLayoutMode): void => {
-    if (mode !== 'fullscreen') {
-      preFullscreenLayoutRef.current = mode;
-      setFullscreenStreamId(null);
-    }
-    setLayoutModeState(mode);
-  }, []);
+  meshBridgeRef.current = {
+    getPeersSnapshot: () => mesh.peersRef.current,
+    getHostPeerId: () => mesh.hostPeerIdRef.current,
+    setPeerStreamingFlag: mesh.setPeerStreamingFlag,
+    broadcastRoomDataChannel: mesh.broadcastRoomDataChannel,
+  };
 
-  const toggleLayoutMode = useCallback((): void => {
-    setLayoutModeState((prev) => {
-      const next = prev === 'grid' ? 'spotlight' : 'grid';
-      preFullscreenLayoutRef.current = next;
-      setFullscreenStreamId(null);
-      return next;
-    });
-  }, []);
+  const knockGate = useKnockGate({
+    normalizedHub,
+    resolvedRole,
+    hasLeftRoom,
+    waitingForProfile,
+    isRoomReady,
+    mountedRef,
+    profileRef,
+    roleRef,
+    hubRef,
+    localPeerIdRef,
+    hostInfoRef,
+    getPeersSnapshot: bridgeGetPeersSnapshot,
+    admitGuestPeer: mesh.admitGuestPeer,
+    onGuestEntranceAccepted: mesh.onGuestEntranceAccepted,
+    onClearHostOfferTimer: mesh.clearHostOfferTimer,
+    onRestoreHub: media.restoreHub,
+  });
 
-  const selectSpotlightStream = useCallback((streamId: string): void => {
-    setSpotlightStreamId(streamId);
-    preFullscreenLayoutRef.current = 'spotlight';
-    setFullscreenStreamId(null);
-    setLayoutModeState('spotlight');
-  }, []);
-
-  const enterFullscreen = useCallback(
-    async (streamId?: string): Promise<void> => {
-      const targetId = streamId || spotlightStreamId || streamsRef.current[0]?.id || null;
-      if (!targetId) return;
-      if (layoutMode !== 'fullscreen') {
-        preFullscreenLayoutRef.current = layoutMode;
-      }
-      setFullscreenStreamId(targetId);
-      setLayoutModeState('fullscreen');
-      await setFullscreenTauri(true).catch(() => {});
-    },
-    [layoutMode, spotlightStreamId]
-  );
-
-  const exitFullscreen = useCallback(async (): Promise<void> => {
-    setFullscreenStreamId(null);
-    setLayoutModeState(preFullscreenLayoutRef.current);
-    await setFullscreenTauri(false).catch(() => {});
-  }, []);
-
-  const minimizeHub = useCallback(async (): Promise<void> => {
-    if (!hubRef.current) return;
-    isMinimizedRef.current = true;
-    setIsMinimized(true);
-
-    await localWindowBus.publish({
-      type: 'minimized_hub_updated',
-      hub: {
-        hubId: hubRef.current,
-        role: roleRef.current,
-        activeStreamsCount: streamsRef.current.length,
-        isSharing: isSharingRef.current,
-        minimizedAt: Date.now(),
-      },
-    });
-
-    await minimizeWindowTauri();
-  }, []);
-
-  const restoreHub = useCallback(async (): Promise<void> => {
-    isMinimizedRef.current = false;
-    setIsMinimized(false);
-    if (hubRef.current) {
-      await localWindowBus.publish({ type: 'minimized_hub_cleared', hubId: hubRef.current });
-    }
-    await restoreStreamWindowTauri();
-  }, []);
-
-  const clearHostOfferTimer = useCallback((): void => {
-    if (hostOfferTimerRef.current === null) return;
-    window.clearTimeout(hostOfferTimerRef.current);
-    hostOfferTimerRef.current = null;
-  }, []);
-
-  const detachTransientKnockSub = useCallback((): void => {
-    if (!transientKnockUnsubRef.current) return;
-    transientKnockUnsubRef.current();
-    transientKnockUnsubRef.current = null;
-  }, []);
+  knockBridgeRef.current = {
+    isEntranceAccepted: () => knockGate.entranceAcceptedRef.current,
+    onHostLeftRoom: knockGate.onHostLeftRoom,
+    detachTransientKnockSub: knockGate.detachTransientKnockSub,
+  };
 
   const cleanupTransportSubscriptions = useCallback((): void => {
-    clearKnockTimer();
-    clearHostOfferTimer();
-    detachTransientKnockSub();
-    pendingPreAcceptSignalsRef.current = [];
+    knockGate.clearKnockGateTimers();
+    mesh.clearHostOfferTimer();
     for (const unsub of roomUnsubsRef.current) {
       unsub();
     }
     roomUnsubsRef.current = [];
-  }, [clearHostOfferTimer, clearKnockTimer, detachTransientKnockSub]);
+  }, [knockGate, mesh]);
 
-  const publishSignalToPeer = useCallback(
-    async (remotePeerIdSafe: string, payload: SignalingPayload): Promise<void> => {
-      const targetHub = hubRef.current;
-      if (!targetHub) return;
-      const targetTopic = getGuestInboxTopic(targetHub, remotePeerIdSafe);
-      if (!targetTopic) return;
-      const envelope = createSignalingEnvelope(targetHub, localPeerIdRef.current, payload);
-      await signalingTransport.publish(targetTopic, envelope);
+  const resetRoomSessionState = useCallback(
+    (forRejoin = false): void => {
+      cleanupTransportSubscriptions();
+      media.resetMediaState();
+      mesh.resetMeshPeersState(forRejoin);
+      knockGate.resetKnockGateState(forRejoin);
+      hasAutoStartedRef.current = false;
+      if (mountedRef.current) {
+        setConnectionFailure(null);
+      }
     },
-    []
+    [cleanupTransportSubscriptions, knockGate, media, mesh]
   );
 
-  const resetRoomSessionState = useCallback((): void => {
-    void webrtcStreamEngine.stopScreenCapture();
-    webrtcStreamEngine.closeAllPeers();
-    cleanupTransportSubscriptions();
+  kickedBridgeRef.current = (reason?: string): void => {
+    const resolvedReason = reason?.trim() || 'You were removed from the room by the host.';
+    resetRoomSessionState(false);
+    if (mountedRef.current) {
+      setIsRoomReady(false);
+      setKickedReason(resolvedReason);
+    }
+    if (hubRef.current) {
+      void localWindowBus.publish({ type: 'minimized_hub_cleared', hubId: hubRef.current });
+    }
+  };
 
-    localStreamRef.current = null;
-    isSharingRef.current = false;
-    remoteStreamsRef.current.clear();
-    remoteMetaRef.current.clear();
-    peerTokensRef.current.clear();
-    knockReplyTopicsRef.current.clear();
-    pendingPreAcceptSignalsRef.current = [];
-    peersRef.current = [];
-    streamsRef.current = [];
-    sessionTokenRef.current = '';
-    hostPeerIdRef.current = '';
-    hasAutoStartedRef.current = false;
-    isMinimizedRef.current = false;
-
-    if (!mountedRef.current) return;
-    setLocalStream(null);
-    setIsSharing(false);
-    setIsMinimized(false);
-    setConnectionFailure(null);
-    setPendingKnocks([]);
-    setPeers([]);
-    setStreams([]);
-  }, [cleanupTransportSubscriptions]);
+  const clearKickedState = useCallback((): void => {
+    setKickedReason(null);
+  }, []);
 
   const leaveRoom = useCallback(async (): Promise<void> => {
     const notifyTargets = new Set<string>();
-    for (const peer of peersRef.current) {
+    for (const peer of mesh.peersRef.current) {
       if (peer.peerIdSafe && peer.peerIdSafe !== localPeerIdRef.current) {
         notifyTargets.add(peer.peerIdSafe);
       }
     }
-    if (hostPeerIdRef.current && hostPeerIdRef.current !== localPeerIdRef.current) {
-      notifyTargets.add(hostPeerIdRef.current);
+    if (mesh.hostPeerIdRef.current && mesh.hostPeerIdRef.current !== localPeerIdRef.current) {
+      notifyTargets.add(mesh.hostPeerIdRef.current);
     }
 
-    broadcastRoomDataChannel({ type: 'peer_left', peerIdSafe: localPeerIdRef.current });
+    mesh.broadcastRoomDataChannel({ type: 'peer_left', peerIdSafe: localPeerIdRef.current });
     const peerLeftPublishes = Array.from(notifyTargets).map((peerId) =>
-      publishSignalToPeer(peerId, {
+      mesh.publishSignalToPeer(peerId, {
         type: 'peer_left',
         peerIdSafe: localPeerIdRef.current,
       })
@@ -754,26 +395,28 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       ]);
     }
 
-    await stopSharing();
-    resetRoomSessionState();
+    try {
+      await media.stopSharing({ skipRenegotiate: true });
+    } finally {
+      resetRoomSessionState(false);
 
-    if (mountedRef.current) {
-      setHasLeftRoom(true);
-    }
+      if (mountedRef.current) {
+        setKickedReason(null);
+        setIsRoomReady(false);
+        setHasLeftRoom(true);
+      }
 
-    if (hubRef.current) {
-      await localWindowBus.publish({ type: 'minimized_hub_cleared', hubId: hubRef.current });
+      if (hubRef.current) {
+        await localWindowBus.publish({ type: 'minimized_hub_cleared', hubId: hubRef.current });
+      }
     }
-  }, [broadcastRoomDataChannel, publishSignalToPeer, resetRoomSessionState, stopSharing]);
+  }, [media, mesh, resetRoomSessionState]);
 
   const rejoinRoom = useCallback((): void => {
-    resetRoomSessionState();
-    entranceAcceptedRef.current = roleRef.current === 'owner';
+    resetRoomSessionState(true);
+    setKickedReason(null);
+    setIsRoomReady(false);
     setHasLeftRoom(false);
-    setKnockError(null);
-    setConnectionFailure(null);
-    setKnockStatus(roleRef.current === 'owner' ? 'accepted' : 'knocking');
-    setEntranceAccepted(roleRef.current === 'owner');
     setSessionNonce((n) => n + 1);
   }, [resetRoomSessionState]);
 
@@ -786,810 +429,69 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
     rejoinRoom();
   }, [rejoinRoom]);
 
-  const dismissHighLoadSuggestion = useCallback((): void => {
-    highLoadDismissedRef.current = true;
-    setHighLoadSuggestion(null);
-  }, []);
-
-  const cleanupExistingPeerConnection = useCallback(
-    (peerIdSafe: string, removeFromRoster = false): boolean => {
-      if (!peerIdSafe || peerIdSafe === localPeerIdRef.current) return false;
-      const inRoster = peersRef.current.some((peer) => peer.peerIdSafe === peerIdSafe);
-      const hasEnginePeer = webrtcStreamEngine.hasPeer(peerIdSafe);
-      const hasStream = remoteStreamsRef.current.has(peerIdSafe);
-      const hasMeta = remoteMetaRef.current.has(peerIdSafe);
-      const hasToken = peerTokensRef.current.has(peerIdSafe);
-      const hadConnection = inRoster || hasEnginePeer || hasStream || hasMeta || hasToken;
-
-      webrtcStreamEngine.closePeer(peerIdSafe);
-      remoteStreamsRef.current.delete(peerIdSafe);
-      remoteMetaRef.current.delete(peerIdSafe);
-      peerTokensRef.current.delete(peerIdSafe);
-
-      if (removeFromRoster && inRoster) {
-        updatePeersList((prev) => prev.filter((item) => item.peerIdSafe !== peerIdSafe));
-        rebuildStreams();
-      } else if (hasStream) {
-        rebuildStreams();
-      }
-
-      return hadConnection;
-    },
-    [rebuildStreams, updatePeersList]
-  );
-
-  const connectMeshPeersFromRoster = useCallback(
-    (roster: RoomPeerDto[]): void => {
-      if (roleRef.current !== 'guest' || !hubRef.current) return;
-      const myId = localPeerIdRef.current;
-
-      for (const peer of roster) {
-        if (peer.peerIdSafe === myId || peer.peerIdSafe === hostPeerIdRef.current) continue;
-        if (webrtcStreamEngine.hasPeer(peer.peerIdSafe)) {
-          if (webrtcStreamEngine.isPeerHealthy(peer.peerIdSafe)) continue;
-          cleanupExistingPeerConnection(peer.peerIdSafe, false);
-        }
-        if (myId.localeCompare(peer.peerIdSafe) >= 0) continue;
-
-        const meshToken = getMeshTokenForPair(hubRef.current, myId, peer.peerIdSafe);
-        peerTokensRef.current.set(peer.peerIdSafe, meshToken);
-        webrtcStreamEngine.registerPeerSessionToken(peer.peerIdSafe, meshToken);
-        void webrtcStreamEngine.initiatePeerConnection(peer.peerIdSafe, meshToken);
-      }
-    },
-    [cleanupExistingPeerConnection]
-  );
-
-  const handleAcceptKnockAction = useCallback(
-    async (knock: PendingKnock): Promise<void> => {
+  const handleProbeRequest = useCallback(
+    async (envelope: SignalingEnvelopeDto): Promise<void> => {
       if (roleRef.current !== 'owner' || !hubRef.current) return;
-      setPendingKnocks((prev) => prev.filter((item) => item.peerIdSafe !== knock.peerIdSafe));
+      if (envelope.payload.type !== 'hub_status_request') return;
+
+      const streamingPeers = mesh.peersRef.current.filter((peer) => peer.isStreaming);
+      const streamerNames = streamingPeers.map((peer) => peer.displayName);
+      const isBroadcasting = streamerNames.length > 0 || media.isSharingRef.current;
+      if (media.isSharingRef.current && !streamerNames.includes(profileRef.current.nickname)) {
+        streamerNames.unshift(profileRef.current.nickname);
+      }
 
       const replyTopic =
-        knockReplyTopicsRef.current.get(knock.peerIdSafe) ||
-        getGuestInboxTopic(hubRef.current, knock.peerIdSafe);
+        envelope.payload.replyTopic ||
+        getGuestInboxTopic(hubRef.current, envelope.payload.requesterIdSafe);
+      if (!replyTopic) return;
 
-      const effectivePeerCount = peersRef.current.filter(
-        (peer) => peer.peerIdSafe !== knock.peerIdSafe
-      ).length;
-
-      if (!canAcceptMorePeers(effectivePeerCount)) {
-        const denyEnvelope = createSignalingEnvelope<KnockDecisionPayload>(
-          hubRef.current,
-          localPeerIdRef.current,
-          {
-            type: 'knock_decision',
-            accepted: false,
-            sessionToken: '',
-            peerRoster: [],
-            hostPeerIdSafe: localPeerIdRef.current,
-            hostDisplayName: profileRef.current.nickname,
-            reason: `Room is full (max ${ROOM_CONFIG.MAX_CONCURRENT_PEERS} peers).`,
-          }
-        );
-        await signalingTransport.publish(replyTopic, denyEnvelope);
-        return;
-      }
-
-      cleanupExistingPeerConnection(knock.peerIdSafe, true);
-
-      const sessionToken = createUniqueId('sess');
-      peerTokensRef.current.set(knock.peerIdSafe, sessionToken);
-      webrtcStreamEngine.registerPeerSessionToken(knock.peerIdSafe, sessionToken);
-
-      const newPeer: RoomPeerDto = {
-        peerIdSafe: knock.peerIdSafe,
-        peerTag: knock.peerTag,
-        displayName: knock.displayName,
-        avatarUrl: knock.avatarUrl || '',
-        role: 'guest',
-        isStreaming: false,
-        joinedAt: Date.now(),
-      };
-
-      const nextRoster = updatePeersList((prev) => [
-        ...prev.filter((item) => item.peerIdSafe !== knock.peerIdSafe),
-        newPeer,
-      ]);
-
-      const acceptEnvelope = createSignalingEnvelope<KnockDecisionPayload>(
+      const response = createSignalingEnvelope<HubStatusResponsePayload>(
         hubRef.current,
         localPeerIdRef.current,
         {
-          type: 'knock_decision',
-          accepted: true,
-          sessionToken,
-          peerRoster: nextRoster,
-          hostPeerIdSafe: localPeerIdRef.current,
-          hostDisplayName: profileRef.current.nickname,
+          type: 'hub_status_response',
+          requestId: envelope.payload.requestId,
+          hubId: hubRef.current,
+          status: isBroadcasting ? 'broadcasting' : 'online',
+          peers: mesh.peersRef.current.length,
+          streamerNames,
+          respondedAt: Date.now(),
         }
       );
 
-      await signalingTransport.publish(replyTopic, acceptEnvelope);
-      broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
-
-      void telemetryAdapter.trackEvent('knock_accepted', {
-        role: 'owner',
-        peerCountTier: toPeerCountTier(nextRoster.length),
-      });
-
-      await Promise.resolve();
-      await webrtcStreamEngine.initiatePeerConnection(knock.peerIdSafe, sessionToken);
+      await signalingTransport.publish(replyTopic, response);
     },
-    [broadcastRoomDataChannel, cleanupExistingPeerConnection, updatePeersList]
+    [media.isSharingRef, mesh.peersRef]
   );
 
-  const handleRejectKnockAction = useCallback(async (knock: PendingKnock): Promise<void> => {
-    if (roleRef.current !== 'owner' || !hubRef.current) return;
-    setPendingKnocks((prev) => prev.filter((item) => item.peerIdSafe !== knock.peerIdSafe));
-
-    const replyTopic =
-      knockReplyTopicsRef.current.get(knock.peerIdSafe) ||
-      getGuestInboxTopic(hubRef.current, knock.peerIdSafe);
-
-    const rejectEnvelope = createSignalingEnvelope<KnockDecisionPayload>(
-      hubRef.current,
-      localPeerIdRef.current,
-      {
-        type: 'knock_decision',
-        accepted: false,
-        sessionToken: '',
-        peerRoster: [],
-        hostPeerIdSafe: localPeerIdRef.current,
-        hostDisplayName: profileRef.current.nickname,
-        reason: 'Host declined your entrance request.',
-      }
-    );
-
-    await signalingTransport.publish(replyTopic, rejectEnvelope);
-  }, []);
-
-  const persistJoinedFriendHub = useCallback(
-    async (hubTopic: string, payload: KnockDecisionPayload): Promise<void> => {
-      try {
-        const existingHubs = await storageRepository.listFriendHubs();
-        const existing = existingHubs.find(
-          (item) => normalizeHubTopic(item.hubId) === hubTopic
-        );
-        const hostPeer = payload.peerRoster.find(
-          (peer) => peer.peerIdSafe === payload.hostPeerIdSafe
-        );
-        const parsedHost = extractHostFromHub(hubTopic);
-
-        await storageRepository.upsertFriendHub({
-          hubId: hubTopic,
-          ownerNickname: payload.hostDisplayName || parsedHost.displayName,
-          ownerTag: hostPeer?.peerTag || parsedHost.tag,
-          ownerAvatar: hostPeer?.avatarUrl || '',
-          lastJoinedAt: Date.now(),
-          isFavorite: existing?.isFavorite ?? false,
-        });
-      } catch (err) {
-        console.warn('[useRoomSession] Failed to save Friend Hub:', err);
-      }
-    },
-    []
-  );
-
-  const verifyAndRegisterOfferToken = useCallback(
-    (fromPeerIdSafe: string, sessionToken: string): boolean => {
-      if (!fromPeerIdSafe || !sessionToken || !hubRef.current) return false;
-
-      if (roleRef.current === 'owner') {
-        return peerTokensRef.current.get(fromPeerIdSafe) === sessionToken;
-      }
-
-      if (!entranceAcceptedRef.current) return false;
-
-      if (fromPeerIdSafe === hostPeerIdRef.current) {
-        if (!sessionTokenRef.current || sessionToken !== sessionTokenRef.current) return false;
-        peerTokensRef.current.set(fromPeerIdSafe, sessionToken);
-        webrtcStreamEngine.registerPeerSessionToken(fromPeerIdSafe, sessionToken);
-        return true;
-      }
-
-      const isKnownPeer = peersRef.current.some((peer) => peer.peerIdSafe === fromPeerIdSafe);
-      if (!isKnownPeer) return false;
-
-      const expectedMeshToken = getMeshTokenForPair(
-        hubRef.current,
-        localPeerIdRef.current,
-        fromPeerIdSafe
-      );
-      if (sessionToken !== expectedMeshToken) return false;
-
-      peerTokensRef.current.set(fromPeerIdSafe, sessionToken);
-      webrtcStreamEngine.registerPeerSessionToken(fromPeerIdSafe, sessionToken);
-      return true;
-    },
-    []
-  );
-
-  const bufferPreAcceptSignal = useCallback((envelope: SignalingEnvelopeDto): void => {
-    if (pendingPreAcceptSignalsRef.current.length >= 64) {
-      pendingPreAcceptSignalsRef.current.shift();
-    }
-    pendingPreAcceptSignalsRef.current.push(envelope);
-  }, []);
-
-  const processOfferEnvelope = useCallback(
-    (envelope: SignalingEnvelopeDto): Promise<void> | void => {
-      if (envelope.payload.type !== 'webrtc_offer') return;
-      if (roleRef.current === 'guest' && !entranceAcceptedRef.current) {
-        bufferPreAcceptSignal(envelope);
-        return;
-      }
-      const { fromPeerIdSafe, sdp, sessionToken } = envelope.payload;
-      if (!verifyAndRegisterOfferToken(fromPeerIdSafe, sessionToken)) return;
-      return webrtcStreamEngine.handleIncomingOffer(fromPeerIdSafe, sdp, sessionToken);
-    },
-    [bufferPreAcceptSignal, verifyAndRegisterOfferToken]
-  );
-
-  const processIceEnvelope = useCallback(
-    (envelope: SignalingEnvelopeDto): Promise<void> | void => {
-      if (envelope.payload.type !== 'webrtc_ice') return;
-      if (roleRef.current === 'guest' && !entranceAcceptedRef.current) {
-        bufferPreAcceptSignal(envelope);
-        return;
-      }
-      const { fromPeerIdSafe, candidate, sessionToken } = envelope.payload;
-      const validToken =
-        peerTokensRef.current.get(fromPeerIdSafe) === sessionToken ||
-        verifyAndRegisterOfferToken(fromPeerIdSafe, sessionToken);
-      if (!validToken) return;
-      return webrtcStreamEngine.handleIncomingIce(fromPeerIdSafe, candidate, sessionToken);
-    },
-    [bufferPreAcceptSignal, verifyAndRegisterOfferToken]
-  );
-
-  const handleKnockDecision = useCallback(
-    async (envelope: SignalingEnvelopeDto): Promise<void> => {
-      if (roleRef.current !== 'guest') return;
-      if (envelope.payload.type !== 'knock_decision') return;
-      const payload = envelope.payload;
-      clearKnockTimer();
-      clearHostOfferTimer();
-
-      if (!payload.accepted) {
-        pendingPreAcceptSignalsRef.current = [];
-        entranceAcceptedRef.current = false;
-        setEntranceAccepted(false);
-        setKnockStatus('rejected');
-        setKnockError(payload.reason || 'Host declined your entrance request.');
-        return;
-      }
-
-      cleanupExistingPeerConnection(payload.hostPeerIdSafe, false);
-      for (const peer of payload.peerRoster) {
-        if (peer.peerIdSafe === payload.hostPeerIdSafe) continue;
-        cleanupExistingPeerConnection(peer.peerIdSafe, false);
-      }
-
-      sessionTokenRef.current = payload.sessionToken;
-      hostPeerIdRef.current = payload.hostPeerIdSafe;
-      peerTokensRef.current.set(payload.hostPeerIdSafe, payload.sessionToken);
-      webrtcStreamEngine.registerPeerSessionToken(payload.hostPeerIdSafe, payload.sessionToken);
-
-      entranceAcceptedRef.current = true;
-      setEntranceAccepted(true);
-      setKnockStatus('accepted');
-      setKnockError(null);
-      updatePeersList(() => payload.peerRoster);
-
-      const bufferedSignals = pendingPreAcceptSignalsRef.current.splice(0);
-      const bufferedOffers = bufferedSignals.filter((sig) => sig.payload.type === 'webrtc_offer');
-      const bufferedIce = bufferedSignals.filter((sig) => sig.payload.type === 'webrtc_ice');
-      for (const sig of [...bufferedOffers, ...bufferedIce]) {
-        if (sig.payload.type === 'webrtc_offer') {
-          await processOfferEnvelope(sig);
-          continue;
-        }
-        await processIceEnvelope(sig);
-      }
-
-      if (!webrtcStreamEngine.isPeerConnected(payload.hostPeerIdSafe)) {
-        hostOfferTimerRef.current = window.setTimeout(() => {
-          hostOfferTimerRef.current = null;
-          if (!mountedRef.current || !entranceAcceptedRef.current) return;
-          if (webrtcStreamEngine.isPeerConnected(payload.hostPeerIdSafe)) return;
-
-          const hasPeer = webrtcStreamEngine.hasPeer(payload.hostPeerIdSafe);
-          setConnectionFailure({
-            stage: hasPeer ? 'ice_negotiation' : 'sdp_handshake',
-            reason: hasPeer
-              ? 'Received host offer, but P2P DataChannel / ICE failed to establish within 8s.'
-              : 'Accepted by host, but did not receive the WebRTC stream offer from host.',
-            details: `host=${payload.hostPeerIdSafe}, hub=${hubRef.current}, hasPeer=${hasPeer}, connectedPeers=${webrtcStreamEngine.getConnectedPeerIds().join(',') || 'none'}`,
-            peerIdSafe: payload.hostPeerIdSafe,
-            timestamp: Date.now(),
-          });
-        }, 8000);
-      }
-
-      connectMeshPeersFromRoster(payload.peerRoster);
-
-      if (hubRef.current) {
-        await persistJoinedFriendHub(hubRef.current, payload);
-      }
-
-      void telemetryAdapter.trackEvent('room_joined', {
-        role: 'guest',
-        peerCountTier: toPeerCountTier(payload.peerRoster.length),
-      });
-    },
-    [
-      cleanupExistingPeerConnection,
-      clearHostOfferTimer,
-      clearKnockTimer,
-      connectMeshPeersFromRoster,
-      persistJoinedFriendHub,
-      processIceEnvelope,
-      processOfferEnvelope,
-      updatePeersList,
-    ]
-  );
-
-  const handleProbeRequest = useCallback(async (envelope: SignalingEnvelopeDto): Promise<void> => {
-    if (roleRef.current !== 'owner' || !hubRef.current) return;
-    if (envelope.payload.type !== 'hub_status_request') return;
-
-    const streamingPeers = peersRef.current.filter((peer) => peer.isStreaming);
-    const streamerNames = streamingPeers.map((peer) => peer.displayName);
-    const isBroadcasting = streamerNames.length > 0 || isSharingRef.current;
-    if (isSharingRef.current && !streamerNames.includes(profileRef.current.nickname)) {
-      streamerNames.unshift(profileRef.current.nickname);
-    }
-
-    const replyTopic =
-      envelope.payload.replyTopic ||
-      getGuestInboxTopic(hubRef.current, envelope.payload.requesterIdSafe);
-    if (!replyTopic) return;
-
-    const response = createSignalingEnvelope<HubStatusResponsePayload>(
-      hubRef.current,
-      localPeerIdRef.current,
-      {
-        type: 'hub_status_response',
-        requestId: envelope.payload.requestId,
-        hubId: hubRef.current,
-        status: isBroadcasting ? 'broadcasting' : 'online',
-        peers: peersRef.current.length,
-        streamerNames,
-        respondedAt: Date.now(),
-      }
-    );
-
-    await signalingTransport.publish(replyTopic, response);
-  }, []);
-
-  const handleIncomingKnockRequest = useCallback(async (envelope: SignalingEnvelopeDto): Promise<void> => {
-    if (roleRef.current !== 'owner' || !hubRef.current) return;
-    if (envelope.payload.type !== 'knock_request') return;
-
-    const payload = envelope.payload;
-    if (payload.peerIdSafe === localPeerIdRef.current) return;
-
-    const effectivePeerCount = peersRef.current.filter(
-      (peer) => peer.peerIdSafe !== payload.peerIdSafe
-    ).length;
-
-    if (!canAcceptMorePeers(effectivePeerCount)) {
-      const denyEnvelope = createSignalingEnvelope<KnockDecisionPayload>(
-        hubRef.current,
-        localPeerIdRef.current,
-        {
-          type: 'knock_decision',
-          accepted: false,
-          sessionToken: '',
-          peerRoster: [],
-          hostPeerIdSafe: localPeerIdRef.current,
-          hostDisplayName: profileRef.current.nickname,
-          reason: `Room is full (max ${ROOM_CONFIG.MAX_CONCURRENT_PEERS} peers).`,
-        }
-      );
-      await signalingTransport.publish(payload.replyTopic, denyEnvelope);
-      return;
-    }
-
-    knockReplyTopicsRef.current.set(payload.peerIdSafe, payload.replyTopic);
-    const knockItem: PendingKnock = {
-      id: `k_${payload.peerIdSafe}_${envelope.sentAt}`,
-      peerTag: payload.peerTag,
-      peerIdSafe: payload.peerIdSafe,
-      displayName: payload.displayName,
-      avatarUrl: payload.avatarUrl,
-      timestamp: envelope.sentAt,
-      hubTopic: hubRef.current,
-    };
-
-    playKnockSound(payload.peerIdSafe);
-    showKnockNotification(payload.displayName, payload.peerTag, {
-      peerIdSafe: payload.peerIdSafe,
-      hubId: hubRef.current,
-      replyTopic: payload.replyTopic,
-    });
-
-    setPendingKnocks((prev) => [
-      knockItem,
-      ...prev.filter((item) => item.peerIdSafe !== payload.peerIdSafe),
-    ]);
-  }, []);
-
-  const sendKnockRequest = useCallback(async (): Promise<void> => {
-    const targetHub = hubRef.current;
-    if (!targetHub || roleRef.current !== 'guest') return;
-
-    const knockTopic = getKnockTopic(targetHub);
-    const guestInbox = getGuestInboxTopic(targetHub, localPeerIdRef.current);
-    const knockReplyTopic = `${guestInbox}/knock`;
-    if (!knockTopic || !guestInbox) return;
-
-    clearKnockTimer();
-    setKnockError(null);
-    setKnockStatus('knocking');
-    setEntranceAccepted(false);
-    entranceAcceptedRef.current = false;
-
-    detachTransientKnockSub();
-    transientKnockUnsubRef.current = await signalingTransport.subscribeTopic(
-      knockReplyTopic,
-      (envelope) => {
-        void handleKnockDecision(envelope);
-      }
-    );
-
-    const requestEnvelope = createSignalingEnvelope<KnockRequestPayload>(
-      targetHub,
-      localPeerIdRef.current,
-      {
-        type: 'knock_request',
-        peerTag: formatFullPeerTag(profileRef.current.nickname, profileRef.current.peerTag),
-        peerIdSafe: localPeerIdRef.current,
-        displayName: profileRef.current.nickname,
-        avatarUrl: profileRef.current.avatarUrl,
-        replyTopic: knockReplyTopic,
-      }
-    );
-
-    await signalingTransport.publish(knockTopic, requestEnvelope);
-
-    knockTimerRef.current = window.setTimeout(() => {
-      if (!mountedRef.current || entranceAcceptedRef.current) return;
-      setKnockStatus('timeout');
-    }, KNOCK_TIMEOUT_MS);
-  }, [clearKnockTimer, detachTransientKnockSub, handleKnockDecision]);
-
-  const cancelKnock = useCallback((): void => {
-    clearKnockTimer();
-    detachTransientKnockSub();
-    setKnockStatus('idle');
-  }, [clearKnockTimer, detachTransientKnockSub]);
-
-  const handlePeerLeftDataChannel = useCallback(
-    (leftId: string): void => {
-      if (!leftId || leftId === localPeerIdRef.current) return;
-
-      if (roleRef.current === 'guest' && leftId === hostPeerIdRef.current) {
-        webrtcStreamEngine.closeAllPeers();
-        remoteStreamsRef.current.clear();
-        remoteMetaRef.current.clear();
-        peerTokensRef.current.clear();
-        sessionTokenRef.current = '';
-        hostPeerIdRef.current = '';
-        entranceAcceptedRef.current = false;
-        updatePeersList(() => []);
-        rebuildStreams();
-        if (mountedRef.current) {
-          setEntranceAccepted(false);
-          setKnockStatus('idle');
-          setKnockError('Host left the room. Knock again when they return.');
-        }
-        return;
-      }
-
-      remoteStreamsRef.current.delete(leftId);
-      remoteMetaRef.current.delete(leftId);
-      peerTokensRef.current.delete(leftId);
-      webrtcStreamEngine.closePeer(leftId);
-      const nextRoster = updatePeersList((prev) =>
-        prev.filter((item) => item.peerIdSafe !== leftId)
-      );
-      if (roleRef.current === 'owner') {
-        broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
-      }
-      rebuildStreams();
-    },
-    [broadcastRoomDataChannel, rebuildStreams, updatePeersList]
-  );
-
-  const evictStalePeerWithoutLeavingRoom = useCallback(
-    (stalePeerId: string): void => {
-      if (!stalePeerId || stalePeerId === localPeerIdRef.current) return;
-
-      remoteStreamsRef.current.delete(stalePeerId);
-      remoteMetaRef.current.delete(stalePeerId);
-      peerTokensRef.current.delete(stalePeerId);
-      webrtcStreamEngine.closePeer(stalePeerId);
-
-      const nextRoster = updatePeersList((prev) =>
-        prev.filter((item) => item.peerIdSafe !== stalePeerId)
-      );
-      if (roleRef.current === 'owner') {
-        broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
-      }
-      rebuildStreams();
-
-      if (roleRef.current === 'guest' && stalePeerId === hostPeerIdRef.current && mountedRef.current) {
-        setConnectionFailure(
-          (prev) =>
-            prev ?? {
-              stage: 'peer_disconnected',
-              reason: 'Lost connection to the host stream session.',
-              details: `host=${stalePeerId}, hub=${hubRef.current}`,
-              peerIdSafe: stalePeerId,
-              timestamp: Date.now(),
-            }
-        );
-      }
-    },
-    [broadcastRoomDataChannel, rebuildStreams, updatePeersList]
-  );
-
-  const handleDataChannelOpenCallback = useCallback(
-    (peerIdSafe: string): void => {
-      const token =
-        peerTokensRef.current.get(peerIdSafe) || sessionTokenRef.current || 'room-session';
-      if (roleRef.current === 'guest' && peerIdSafe === hostPeerIdRef.current) {
-        clearHostOfferTimer();
-        detachTransientKnockSub();
-      }
-      if (mountedRef.current) {
-        setConnectionFailure(null);
-      }
-      if (roleRef.current === 'owner') {
-        webrtcStreamEngine.sendDataChannelMessage(
-          peerIdSafe,
-          { type: 'peer_roster_sync', peers: peersRef.current },
-          token
-        );
-      }
-      if (isSharingRef.current) {
-        webrtcStreamEngine.sendDataChannelMessage(
-          peerIdSafe,
-          {
-            type: 'stream_started',
-            peerIdSafe: localPeerIdRef.current,
-            displayName: profileRef.current.nickname,
-            avatarUrl: profileRef.current.avatarUrl,
-            resolution: STREAM_CONFIG.DEFAULT_RESOLUTION,
-            fps: fpsRef.current,
-          },
-          token
-        );
-      }
-      webrtcStreamEngine.sendDataChannelMessage(
-        peerIdSafe,
-        { type: 'ping', sentAt: Date.now() },
-        token
-      );
-    },
-    [clearHostOfferTimer, detachTransientKnockSub]
-  );
-
-  const handlePeerStateChangeCallback = useCallback(
-    (peerIdSafe: string, state: RTCPeerConnectionState): void => {
-      if (state !== 'failed' && state !== 'closed') return;
-      remoteStreamsRef.current.delete(peerIdSafe);
-      if (roleRef.current === 'owner') {
-        const nextRoster = updatePeersList((prev) =>
-          prev.filter((item) => item.peerIdSafe !== peerIdSafe)
-        );
-        broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
-      }
-      rebuildStreams();
-    },
-    [broadcastRoomDataChannel, rebuildStreams, updatePeersList]
-  );
-
-  const createDcDispatchMap = useCallback((): Record<DataChannelMessageType, DataChannelHandler> => {
-    return {
-      peer_roster_sync: (_peerId, env) => {
-        if (env.payload.type !== 'peer_roster_sync') return;
-        const roster = env.payload.peers;
-        const existingById = new Map(
-          peersRef.current.map((item) => [item.peerIdSafe, item])
-        );
-        for (const peer of roster) {
-          if (peer.peerIdSafe === localPeerIdRef.current || peer.peerIdSafe === hostPeerIdRef.current) {
-            continue;
-          }
-          const existingPeer = existingById.get(peer.peerIdSafe);
-          const staleOrReplaced =
-            (existingPeer && peer.joinedAt > existingPeer.joinedAt) ||
-            (webrtcStreamEngine.hasPeer(peer.peerIdSafe) &&
-              !webrtcStreamEngine.isPeerHealthy(peer.peerIdSafe));
-          if (staleOrReplaced) {
-            cleanupExistingPeerConnection(peer.peerIdSafe, false);
-          }
-        }
-        updatePeersList(() => roster);
-        connectMeshPeersFromRoster(roster);
-        rebuildStreams();
-      },
-      stream_started: (_peerId, env) => {
-        if (env.payload.type !== 'stream_started') return;
-        const p = env.payload;
-        remoteMetaRef.current.set(p.peerIdSafe, {
-          resolution: p.resolution,
-          fps: p.fps,
-          displayName: p.displayName,
-          avatarUrl: p.avatarUrl,
-        });
-        updatePeersList((prev) =>
-          prev.map((peer) =>
-            peer.peerIdSafe === p.peerIdSafe
-              ? { ...peer, displayName: p.displayName, avatarUrl: p.avatarUrl, isStreaming: true }
-              : peer
-          )
-        );
-        rebuildStreams();
-      },
-      stream_stopped: (_peerId, env) => {
-        if (env.payload.type !== 'stream_stopped') return;
-        remoteMetaRef.current.delete(env.payload.peerIdSafe);
-        remoteStreamsRef.current.delete(env.payload.peerIdSafe);
-        setPeerStreamingFlag(env.payload.peerIdSafe, false);
-        rebuildStreams();
-      },
-      peer_profile_updated: (_peerId, env) => {
-        if (env.payload.type !== 'peer_profile_updated') return;
-        const p = env.payload;
-        const existingMeta = remoteMetaRef.current.get(p.peerIdSafe);
-        if (existingMeta) {
-          remoteMetaRef.current.set(p.peerIdSafe, {
-            ...existingMeta,
-            displayName: p.displayName,
-            avatarUrl: p.avatarUrl,
-          });
-        }
-        const nextRoster = updatePeersList((prev) =>
-          prev.map((peer) =>
-            peer.peerIdSafe === p.peerIdSafe
-              ? { ...peer, displayName: p.displayName, avatarUrl: p.avatarUrl }
-              : peer
-          )
-        );
-        if (roleRef.current === 'owner') {
-          broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
-        }
-        rebuildStreams();
-      },
-      renegotiate_offer: () => {},
-      renegotiate_answer: () => {},
-      renegotiate_ice: () => {},
-      peer_left: (_peerId, env) => {
-        if (env.payload.type !== 'peer_left') return;
-        handlePeerLeftDataChannel(env.payload.peerIdSafe);
-      },
-      ping: () => {},
-      pong: (_peerId, env) => {
-        if (env.payload.type !== 'pong') return;
-        const measured = Math.max(1, Date.now() - env.payload.echoSentAt);
-        dcRttRef.current = measured;
-        if (mountedRef.current) {
-          setSystemMetrics((prev) => ({ ...prev, rttMs: prev.rttMs > 0 ? prev.rttMs : measured }));
-        }
-      },
-    };
-  }, [
-    broadcastRoomDataChannel,
-    cleanupExistingPeerConnection,
-    connectMeshPeersFromRoster,
-    handlePeerLeftDataChannel,
-    rebuildStreams,
-    setPeerStreamingFlag,
-    updatePeersList,
-  ]);
-
-  const configureStreamEngine = useCallback((): void => {
-    const dcHandlers = createDcDispatchMap();
-    const callbacks: StreamEngineCallbacks = {
-      onRemoteStream: (peerIdSafe, stream) => {
-        if (webrtcStreamEngine.isPeerConnected(peerIdSafe)) {
-          if (peerIdSafe === hostPeerIdRef.current) {
-            clearHostOfferTimer();
-          }
-          if (mountedRef.current) {
-            setConnectionFailure(null);
-          }
-        }
-        remoteStreamsRef.current.set(peerIdSafe, stream);
-        setPeerStreamingFlag(peerIdSafe, true);
-        rebuildStreams();
-      },
-      onRemoteStreamRemoved: (peerIdSafe) => {
-        remoteStreamsRef.current.delete(peerIdSafe);
-        setPeerStreamingFlag(peerIdSafe, false);
-        rebuildStreams();
-      },
-      onPeerConnectionStateChange: handlePeerStateChangeCallback,
-      onPeerConnectionError: (failure) => {
-        if (!mountedRef.current) return;
-        setConnectionFailure(failure);
-      },
-      onDataChannelOpen: handleDataChannelOpenCallback,
-      onDataChannelMessage: (peerIdSafe, envelope) => {
-        dcHandlers[envelope.payload.type](peerIdSafe, envelope);
-      },
-      onSignalOffer: (peerIdSafe, sdp, sessionToken) =>
-        publishSignalToPeer(peerIdSafe, {
-          type: 'webrtc_offer',
-          sessionToken,
-          fromPeerIdSafe: localPeerIdRef.current,
-          replyTopic: getGuestInboxTopic(hubRef.current, localPeerIdRef.current),
-          sdp,
-        }),
-      onSignalAnswer: (peerIdSafe, sdp, sessionToken) =>
-        publishSignalToPeer(peerIdSafe, {
-          type: 'webrtc_answer',
-          sessionToken,
-          fromPeerIdSafe: localPeerIdRef.current,
-          sdp,
-        }),
-      onSignalIce: (peerIdSafe, candidate, sessionToken) =>
-        publishSignalToPeer(peerIdSafe, {
-          type: 'webrtc_ice',
-          sessionToken,
-          fromPeerIdSafe: localPeerIdRef.current,
-          candidate,
-        }),
-    };
-
-    webrtcStreamEngine.configure(localPeerIdRef.current, callbacks);
-  }, [
-    createDcDispatchMap,
-    handleDataChannelOpenCallback,
-    handlePeerStateChangeCallback,
-    publishSignalToPeer,
-    rebuildStreams,
-    setPeerStreamingFlag,
-  ]);
-
-  const createSignalingDispatchMap = useCallback((): Record<SignalingMessageType, SignalingHandler> => {
+  const createSignalingDispatchMap = useCallback((): Record<
+    SignalingMessageType,
+    SignalingHandler
+  > => {
     return {
       hub_status_request: (env) => handleProbeRequest(env),
       hub_status_response: () => {},
-      knock_request: (env) => handleIncomingKnockRequest(env),
-      knock_decision: (env) => handleKnockDecision(env),
-      webrtc_offer: (env) => processOfferEnvelope(env),
-      webrtc_answer: (env) => {
-        if (env.payload.type !== 'webrtc_answer') return;
-        const { fromPeerIdSafe, sdp, sessionToken } = env.payload;
-        if (peerTokensRef.current.get(fromPeerIdSafe) !== sessionToken) return;
-        return webrtcStreamEngine.handleIncomingAnswer(fromPeerIdSafe, sdp, sessionToken);
-      },
-      webrtc_ice: (env) => processIceEnvelope(env),
+      knock_request: (env) => knockGate.handleIncomingKnockRequest(env),
+      knock_decision: (env) => knockGate.handleKnockDecision(env),
+      webrtc_offer: (env) => mesh.processOfferEnvelope(env),
+      webrtc_answer: (env) => mesh.processAnswerEnvelope(env),
+      webrtc_ice: (env) => mesh.processIceEnvelope(env),
       peer_left: (env) => {
         if (env.payload.type !== 'peer_left') return;
-        handlePeerLeftDataChannel(env.payload.peerIdSafe);
+        mesh.handlePeerLeftDataChannel(env.payload.peerIdSafe);
       },
+      peer_kicked: (env) => mesh.processPeerKickedEnvelope(env),
     };
-  }, [
-    handleIncomingKnockRequest,
-    handleKnockDecision,
-    handlePeerLeftDataChannel,
-    handleProbeRequest,
-    processIceEnvelope,
-    processOfferEnvelope,
-  ]);
+  }, [handleProbeRequest, knockGate, mesh]);
 
   // Main stable room lifecycle effect — keyed strictly on primitive identity & hub values.
   useEffect(() => {
     if (!normalizedHub || waitingForProfile || hasLeftRoom) return;
 
     let cancelled = false;
-    configureStreamEngine();
+    setIsRoomReady(false);
+    mesh.configureStreamEngine();
     const signalingHandlers = createSignalingDispatchMap();
 
     const dispatchSignaling = (envelope: SignalingEnvelopeDto): void => {
@@ -1630,17 +532,15 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       roomUnsubsRef.current.push(unsubInbox);
 
       if (resolvedRole !== 'owner') {
-        entranceAcceptedRef.current = false;
-        setEntranceAccepted(false);
-        await sendKnockRequest();
+        knockGate.markGuestKnocking();
+        await knockGate.sendKnockRequest();
+        if (!cancelled) setIsRoomReady(true);
         return;
       }
 
-      entranceAcceptedRef.current = true;
-      setEntranceAccepted(true);
-      setKnockStatus('accepted');
-      updatePeersList(() => [
-        createSelfPeer(profileRef.current, localPeerIdSafe, 'owner', isSharingRef.current),
+      knockGate.markOwnerAccepted();
+      mesh.updatePeersList(() => [
+        createSelfPeer(profileRef.current, localPeerIdSafe, 'owner', media.isSharingRef.current),
       ]);
 
       const unsubKnock = await signalingTransport.subscribeTopic(
@@ -1657,18 +557,19 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
         return;
       }
       roomUnsubsRef.current.push(unsubKnock, unsubProbe);
+      setIsRoomReady(true);
 
       void telemetryAdapter.trackEvent('room_joined', { role: 'owner', peerCountTier: '1' });
       if (options.autoStart && !hasAutoStartedRef.current) {
         hasAutoStartedRef.current = true;
-        void startSharing();
+        void media.startSharing();
       }
     };
 
     void initializeSession();
 
     const handleBeforeUnload = (): void => {
-      broadcastRoomDataChannel({ type: 'peer_left', peerIdSafe: localPeerIdRef.current });
+      mesh.broadcastRoomDataChannel({ type: 'peer_left', peerIdSafe: localPeerIdRef.current });
       if (hubRef.current) {
         void localWindowBus.publish({ type: 'minimized_hub_cleared', hubId: hubRef.current });
       }
@@ -1677,35 +578,28 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
 
     return () => {
       cancelled = true;
+      setIsRoomReady(false);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       cleanupTransportSubscriptions();
-      void webrtcStreamEngine.stopScreenCapture();
       webrtcStreamEngine.closeAllPeers();
-      localStreamRef.current = null;
-      isSharingRef.current = false;
-      remoteStreamsRef.current.clear();
-      remoteMetaRef.current.clear();
-      if (mountedRef.current) {
-        setLocalStream(null);
-        setIsSharing(false);
-      }
+      media.resetMediaState();
     };
+    // Dependencies deliberately exclude mutable hook objects; lifecycle keys strictly on identity & session state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    broadcastRoomDataChannel,
-    cleanupTransportSubscriptions,
-    configureStreamEngine,
-    createSignalingDispatchMap,
     hasLeftRoom,
     localPeerIdSafe,
     normalizedHub,
     options.autoStart,
     resolvedRole,
-    sendKnockRequest,
     sessionNonce,
-    startSharing,
-    updatePeersList,
     waitingForProfile,
   ]);
+
+  const leaveRoomRef = useRef(leaveRoom);
+  leaveRoomRef.current = leaveRoom;
+  const restoreHubRef = useRef(media.restoreHub);
+  restoreHubRef.current = media.restoreHub;
 
   // Listen on localWindowBus for restore / disconnect commands targeting this hub.
   useEffect(() => {
@@ -1713,287 +607,83 @@ export const useRoomSession = (options: UseRoomSessionOptions): UseRoomSessionRe
       profile_updated: () => {},
       minimized_hub_updated: () => {},
       minimized_hub_cleared: () => {},
-      restore_hub_requested: (msg) => {
+      owner_room_status: () => {},
+      restore_hub_requested: (msg: LocalWindowBusMessage) => {
         if (msg.type !== 'restore_hub_requested') return;
         if (normalizeHubTopic(msg.hubId) !== hubRef.current) return;
-        void restoreHub();
+        void restoreHubRef.current();
       },
-      disconnect_hub_requested: (msg) => {
+      disconnect_hub_requested: (msg: LocalWindowBusMessage) => {
         if (msg.type !== 'disconnect_hub_requested') return;
         if (normalizeHubTopic(msg.hubId) !== hubRef.current) return;
-        void leaveRoom();
+        void leaveRoomRef.current();
       },
     };
 
     return localWindowBus.subscribe((message) => {
       busHandlers[message.type](message);
     });
-  }, [leaveRoom, restoreHub]);
-
-  // Handle interactive Windows Toast action buttons ("Allow" / "Decline" / body click).
-  useEffect(() => {
-    if (resolvedRole !== 'owner' || !normalizedHub || hasLeftRoom || waitingForProfile) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const handleToastAction = (payload: KnockToastActionPayload): void => {
-      if (cancelled || roleRef.current !== 'owner' || !hubRef.current) return;
-      if (payload.hubId && normalizeHubTopic(payload.hubId) !== hubRef.current) return;
-
-      if (typeof localStorage !== 'undefined' && payload.peerIdSafe) {
-        try {
-          localStorage.setItem(
-            'elfy_handled_toast_peer',
-            `${payload.peerIdSafe}:${Date.now()}`
-          );
-        } catch {
-          // Ignore storage quota/access errors.
-        }
-      }
-
-      if (payload.action === 'open') {
-        void restoreHub();
-        return;
-      }
-
-      if (!payload.peerIdSafe) return;
-      if (payload.replyTopic) {
-        knockReplyTopicsRef.current.set(payload.peerIdSafe, payload.replyTopic);
-      }
-
-      const existingKnock = pendingKnocksRef.current.find(
-        (item) => item.peerIdSafe === payload.peerIdSafe
-      );
-      const knockTarget: PendingKnock = existingKnock ?? {
-        id: `k_toast_${payload.peerIdSafe}_${Date.now()}`,
-        peerTag: payload.peerTag || payload.peerIdSafe,
-        peerIdSafe: payload.peerIdSafe,
-        displayName: payload.displayName || 'Guest',
-        avatarUrl: '',
-        timestamp: Date.now(),
-        hubTopic: hubRef.current,
-      };
-
-      if (payload.action === 'accept') {
-        void handleAcceptKnockAction(knockTarget);
-      } else if (payload.action === 'reject') {
-        void handleRejectKnockAction(knockTarget);
-      }
-    };
-
-    const consumeDeferredToastAction = async (): Promise<void> => {
-      if (typeof localStorage === 'undefined') return;
-      try {
-        const raw = localStorage.getItem('elfy_pending_toast_action');
-        if (!raw) return;
-        const parsed = JSON.parse(raw) as KnockToastActionPayload & { timestamp?: number };
-        if (parsed.hubId && normalizeHubTopic(parsed.hubId) !== normalizedHub) return;
-        localStorage.removeItem('elfy_pending_toast_action');
-        if (parsed.timestamp && Date.now() - parsed.timestamp > 20_000) return;
-        await signalingTransport.connect();
-        if (!cancelled) {
-          handleToastAction(parsed);
-        }
-      } catch {
-        // Ignore malformed deferred toast payload.
-      }
-    };
-
-    void consumeDeferredToastAction();
-
-    let unlisten: (() => void) | null = null;
-    void listenKnockToastActionTauri(handleToastAction).then((fn) => {
-      if (cancelled) {
-        fn();
-        return;
-      }
-      unlisten = fn;
-    });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [
-    handleAcceptKnockAction,
-    handleRejectKnockAction,
-    hasLeftRoom,
-    normalizedHub,
-    resolvedRole,
-    restoreHub,
-    waitingForProfile,
-  ]);
-
-  const sampleSystemMetricsOnce = useCallback(async (): Promise<void> => {
-    const evictedPeers = webrtcStreamEngine.pingAndCleanupPeers();
-    const now = Date.now();
-    const orphanedPeers = peersRef.current
-      .filter((peer) => {
-        if (peer.peerIdSafe === localPeerIdRef.current) return false;
-        if (roleRef.current === 'guest' && peer.peerIdSafe === hostPeerIdRef.current) return false;
-        if (now - peer.joinedAt <= 12000) return false;
-        return !webrtcStreamEngine.hasPeer(peer.peerIdSafe);
-      })
-      .map((peer) => peer.peerIdSafe);
-
-    for (const stalePeerId of new Set([...evictedPeers, ...orphanedPeers])) {
-      evictStalePeerWithoutLeavingRoom(stalePeerId);
-    }
-
-    const sampled = await systemMonitorAdapter.sampleMetrics(webrtcStreamEngine);
-    if (!mountedRef.current) return;
-
-    const effectiveRtt = sampled.rttMs > 0 ? sampled.rttMs : dcRttRef.current;
-    const merged: SystemMetricsDto = { ...sampled, rttMs: effectiveRtt };
-    setSystemMetrics(merged);
-
-    if (merged.highLoadWarning && !lastHighLoadRef.current) {
-      highLoadDismissedRef.current = false;
-      void telemetryAdapter.trackEvent('high_load_detected', {
-        role: roleRef.current,
-        fps: fpsRef.current,
-        cpuTier: toCpuTier(merged.cpuUsagePercent),
-        ramTier: toRamTier(merged.memoryUsedMb, merged.memoryTotalMb),
-        rttBucket: toRttBucket(effectiveRtt),
-      });
-    }
-    lastHighLoadRef.current = merged.highLoadWarning;
-
-    if (!merged.highLoadWarning) {
-      setHighLoadSuggestion(null);
-      return;
-    }
-
-    if (highLoadDismissedRef.current) return;
-    const advice =
-      fpsRef.current === 60
-        ? 'High CPU/GPU load detected — consider switching to 30 FPS.'
-        : 'High CPU/GPU load detected.';
-    setHighLoadSuggestion(advice);
-  }, [evictStalePeerWithoutLeavingRoom]);
-
-  // Periodic system CPU/RAM + WebRTC FPS/RTT monitoring and high-load warnings.
-  useEffect(() => {
-    if (!normalizedHub || hasLeftRoom) return;
-    void sampleSystemMetricsOnce();
-    const timer = window.setInterval(() => {
-      void sampleSystemMetricsOnce();
-    }, METRICS_POLL_MS);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [hasLeftRoom, normalizedHub, sampleSystemMetricsOnce]);
-
-  // Sync live nickname / avatar changes across connected peers without tearing down the room.
-  useEffect(() => {
-    if (waitingForProfile || hasLeftRoom || !hubRef.current) return;
-    const myId = localPeerIdRef.current;
-    if (!myId) return;
-
-    const nextRoster = updatePeersList((prev) => {
-      let changed = false;
-      const mapped = prev.map((peer) => {
-        if (peer.peerIdSafe !== myId) return peer;
-        if (
-          peer.displayName === options.profile.nickname &&
-          peer.avatarUrl === options.profile.avatarUrl
-        ) {
-          return peer;
-        }
-        changed = true;
-        return {
-          ...peer,
-          displayName: options.profile.nickname,
-          avatarUrl: options.profile.avatarUrl,
-        };
-      });
-      return changed ? mapped : prev;
-    });
-
-    rebuildStreams();
-
-    if (roleRef.current === 'owner' || entranceAcceptedRef.current) {
-      broadcastRoomDataChannel({
-        type: 'peer_profile_updated',
-        peerIdSafe: myId,
-        displayName: options.profile.nickname,
-        avatarUrl: options.profile.avatarUrl,
-      });
-
-      if (isSharingRef.current) {
-        broadcastRoomDataChannel({
-          type: 'stream_started',
-          peerIdSafe: myId,
-          displayName: options.profile.nickname,
-          avatarUrl: options.profile.avatarUrl,
-          resolution: STREAM_CONFIG.DEFAULT_RESOLUTION,
-          fps: fpsRef.current,
-        });
-      }
-
-      if (roleRef.current === 'owner') {
-        broadcastRoomDataChannel({ type: 'peer_roster_sync', peers: nextRoster });
-      }
-    }
-  }, [
-    broadcastRoomDataChannel,
-    hasLeftRoom,
-    options.profile.avatarUrl,
-    options.profile.nickname,
-    rebuildStreams,
-    updatePeersList,
-    waitingForProfile,
-  ]);
+  }, []);
 
   return {
     hubId: normalizedHub || options.hubId,
     role: resolvedRole,
+    localPeerIdSafe,
     hostInfo,
     isConnected,
     hasLeftRoom,
-    knockStatus,
-    knockError,
-    entranceAccepted,
-    pendingKnocks,
-    peers,
-    streams,
-    localStream,
-    isSharing,
-    fps,
-    isDeafened,
-    layoutMode,
-    spotlightStreamId,
-    fullscreenStreamId,
-    isMinimized,
-    systemMetrics,
-    highLoadSuggestion,
+    kickedReason,
+    knockStatus: knockGate.knockStatus,
+    knockError: knockGate.knockError,
+    entranceAccepted: knockGate.entranceAccepted,
+    pendingKnocks: knockGate.pendingKnocks,
+    peers: mesh.peers,
+    streams: media.streams,
+    localStream: media.localStream,
+    isSharing: media.isSharing,
+    isLocalPreviewEnabled: media.isLocalPreviewEnabled,
+    fps: media.fps,
+    resolution: media.resolution,
+    isDeafened: media.isDeafened,
+    streamVolumes: media.streamVolumes,
+    layoutMode: media.layoutMode,
+    spotlightStreamId: media.spotlightStreamId,
+    fullscreenStreamId: media.fullscreenStreamId,
+    isMinimized: media.isMinimized,
+    systemMetrics: metrics.systemMetrics,
+    telemetryHistory: metrics.telemetryHistory,
+    peerTelemetryHistory: metrics.peerTelemetryHistory,
+    highLoadSuggestion: metrics.highLoadSuggestion,
     connectionFailure,
-    requestEntrance: sendKnockRequest,
-    cancelKnock,
-    acceptKnock: handleAcceptKnockAction,
-    rejectKnock: handleRejectKnockAction,
-    startSharing,
-    stopSharing,
-    toggleSharing,
-    setFps,
-    toggleFps,
-    setStreamVolume,
-    toggleDeafen,
-    setLayoutMode,
-    toggleLayoutMode,
-    selectSpotlightStream,
-    enterFullscreen,
-    exitFullscreen,
-    minimizeHub,
-    restoreHub,
+    requestEntrance: knockGate.sendKnockRequest,
+    cancelKnock: knockGate.cancelKnock,
+    acceptKnock: knockGate.acceptKnock,
+    rejectKnock: knockGate.rejectKnock,
+    kickPeer: mesh.kickPeer,
+    clearKickedState,
+    startSharing: media.startSharing,
+    stopSharing: () => media.stopSharing(),
+    toggleSharing: media.toggleSharing,
+    toggleLocalPreview: media.toggleLocalPreview,
+    setLocalPreviewEnabled: media.setLocalPreviewEnabled,
+    setFps: media.setFps,
+    toggleFps: media.toggleFps,
+    setResolution: media.setResolution,
+    cycleResolution: media.cycleResolution,
+    setStreamVolume: media.setStreamVolume,
+    toggleDeafen: media.toggleDeafen,
+    setLayoutMode: media.setLayoutMode,
+    toggleLayoutMode: media.toggleLayoutMode,
+    selectSpotlightStream: media.selectSpotlightStream,
+    enterFullscreen: media.enterFullscreen,
+    exitFullscreen: media.exitFullscreen,
+    minimizeHub: media.minimizeHub,
+    restoreHub: media.restoreHub,
     leaveRoom,
     rejoinRoom,
     retryConnection,
     dismissConnectionFailure,
-    dismissHighLoadSuggestion,
+    dismissHighLoadSuggestion: metrics.dismissHighLoadSuggestion,
   };
 };
 
