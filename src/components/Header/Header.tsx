@@ -16,9 +16,6 @@ import type { HubSidePanelTab } from '../MultiStreamHub/HubSidePanel';
 interface HeaderProps {
   profile: UserProfile;
   roomTitle: string;
-  activeStreamsCount: number;
-  rttMs?: number;
-  isConnected?: boolean;
   layoutMode?: WatchLayoutMode;
   onSelectLayoutMode?: (mode: WatchLayoutMode) => void;
   peers?: RoomPeerDto[];
@@ -32,9 +29,6 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   profile,
   roomTitle,
-  activeStreamsCount,
-  rttMs = 0,
-  isConnected = false,
   layoutMode,
   onSelectLayoutMode,
   peers,
@@ -49,12 +43,6 @@ export const Header: React.FC<HeaderProps> = ({
 
   const fallbackHub = `elfy/hub/${formatFullPeerTag(profile.nickname, profile.peerTag)}`;
   const effectiveRoomTitle = roomTitle || fallbackHub;
-
-  const getConnectionText = (): string => {
-    if (rttMs > 0) return `${Math.round(rttMs)}ms`;
-    if (isConnected) return 'Connected';
-    return 'Connecting...';
-  };
 
   const handleCopyLink = (): void => {
     navigator.clipboard?.writeText(effectiveRoomTitle).catch(() => {});
@@ -129,14 +117,9 @@ export const Header: React.FC<HeaderProps> = ({
 
           <span className={styles.slashDivider}>/</span>
 
-          <div className={styles.roomInfo}>
-            <span className={styles.roomName} title={effectiveRoomTitle}>
-              {effectiveRoomTitle}
-            </span>
-            <span className={styles.activeBadge}>
-              {activeStreamsCount} {activeStreamsCount === 1 ? 'Stream' : 'Streams'} Active
-            </span>
-          </div>
+          <span className={styles.roomName} title={effectiveRoomTitle}>
+            {effectiveRoomTitle}
+          </span>
         </div>
 
         {showRoomControls && layoutMode && onSelectLayoutMode && (
@@ -191,11 +174,6 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         <div className={styles.rightSection}>
-          <div className={styles.meshBadge}>
-            <span className={`${styles.pulseDot} ${!isConnected ? styles.pulseDotIdle : ''}`} />
-            <span>{getConnectionText()}</span>
-          </div>
-
           <button
             className={styles.inviteBtn}
             onClick={handleCopyLink}
@@ -259,19 +237,6 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {onMinimizeHub && (
-            <button
-              className={styles.quickMinBtn}
-              onClick={() => void onMinimizeHub()}
-              title="Minimize Hub to Companion Bar"
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                picture_in_picture_alt
-              </span>
-            </button>
-          )}
-
           <button
             aria-label={`Edit Persona (${profile.nickname}${profile.peerTag})`}
             className={styles.avatarWrap}
@@ -288,7 +253,9 @@ export const Header: React.FC<HeaderProps> = ({
 
           <div className={styles.windowActions}>
             <button
+              aria-label="Minimize Window"
               className={styles.winBtn}
+              data-testid="minimize-window-btn"
               onClick={() => void handleMinimizeWindow()}
               title="Minimize Window"
               type="button"
@@ -300,6 +267,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {isTauri() && (
               <button
+                aria-label="Maximize / Restore"
                 className={styles.winBtn}
                 onClick={() => void handleMaximizeWindow()}
                 title="Maximize / Restore"
@@ -312,6 +280,7 @@ export const Header: React.FC<HeaderProps> = ({
             )}
 
             <button
+              aria-label="Close Watch Room"
               className={`${styles.winBtn} ${styles.winBtnClose}`}
               onClick={() => void handleClose()}
               title="Close Watch Room"

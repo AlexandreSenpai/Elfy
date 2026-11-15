@@ -298,7 +298,11 @@ test('Test 1 — Telemetry Consent Alert & Opt-Out/Opt-In Gating', async ({ brow
 
   const optedInRoom = await openOwnerRoom(page);
   await optedInRoom.getByTestId('toggle-share-btn').click();
-  await optedInRoom.getByTestId('fps-toggle-btn').click();
+  await optedInRoom.getByTestId('stream-settings-btn').click();
+  await expect(optedInRoom.getByTestId('stream-settings-popover')).toBeVisible();
+  await optedInRoom.getByTestId('settings-fps-30').click();
+  await optedInRoom.keyboard.press('Escape');
+  await expect(optedInRoom.getByTestId('stream-settings-popover')).toBeHidden();
 
   await expect.poll(async () => (await readTelemetryEvents(optedInRoom)).length).toBeGreaterThan(0);
   await expect.poll(() => gaRequests.length).toBeGreaterThan(0);
@@ -394,11 +398,15 @@ test('Test 4 — Bidirectional Streaming Stability & Grid/Spotlight/Fullscreen',
   await expect(guestRoom.getByTestId('stream-tile')).toHaveCount(1);
   await waitForContinuousPlayback(ownerRoom, 1, 800);
 
+  await ownerRoom.getByTestId('stream-settings-btn').click();
+  await expect(ownerRoom.getByTestId('stream-settings-popover')).toBeVisible();
   await ownerRoom.getByTestId('dock-self-preview-btn').click();
+  await ownerRoom.keyboard.press('Escape');
+  await expect(ownerRoom.getByTestId('stream-settings-popover')).toBeHidden();
   await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(2);
   await waitForContinuousPlayback(ownerRoom, 2, 600);
 
-  await ownerRoom.getByTestId('layout-toggle-btn').click();
+  await ownerRoom.getByTestId('layout-mode-spotlight').click();
   await expect(ownerRoom.getByTestId('streams-spotlight')).toBeVisible();
 
   await enterFullscreenViewer(ownerRoom);
@@ -407,7 +415,7 @@ test('Test 4 — Bidirectional Streaming Stability & Grid/Spotlight/Fullscreen',
   await expect(ownerRoom.getByTestId('fullscreen-stream-viewer')).toBeHidden();
 });
 
-test('Test 5 — 30/60/120 FPS, Resolution Presets, Self-Preview Toggle & Metrics Badge', async ({
+test('Test 5 — 30/60/120 FPS, Resolution Presets, Self-Preview Toggle & Floating Settings / Telemetry', async ({
   browser,
 }) => {
   const context = await createTrackedContext(browser);
@@ -418,40 +426,73 @@ test('Test 5 — 30/60/120 FPS, Resolution Presets, Self-Preview Toggle & Metric
   await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(0);
   await expect(ownerRoom.getByTestId('encoder-status-pill')).toBeVisible();
 
-  // Opt-in to local self-preview and verify FPS & resolution toggles update stream cleanly
+  // Verify Topbar and BottomDock removals
+  const header = ownerRoom.locator('header');
+  await expect(header).not.toContainText('Connected');
+  await expect(header).not.toContainText(/Stream(s)? Active/i);
+  await expect(header.getByRole('button', { name: /minimize hub companion/i })).toHaveCount(0);
+
+  const bottomDock = ownerRoom.getByTestId('bottom-dock');
+  await expect(ownerRoom.getByTestId('system-metrics-badge')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('minimize-hub-btn')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('layout-toggle-btn')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('fps-toggle-btn')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('resolution-toggle-btn')).toHaveCount(0);
+  await expect(bottomDock.locator('select')).toHaveCount(0);
+
+  // Opt-in to local self-preview and verify floating settings popover updates FPS & resolution
   await ownerRoom.getByTestId('toggle-self-preview-btn').click();
   await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(1);
 
-  const fpsBtn = ownerRoom.getByTestId('fps-toggle-btn');
-  await expect(fpsBtn).toContainText(/60\s*FPS/i);
+  const settingsBtn = ownerRoom.getByTestId('stream-settings-btn');
+  const settingsPopover = ownerRoom.getByTestId('stream-settings-popover');
+  await expect(settingsBtn).toContainText(/1080p\s*·\s*60\s*FPS/i);
   await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/60\s*fps/i);
 
-  await fpsBtn.click();
-  await expect(fpsBtn).toContainText(/30\s*FPS/i);
+  await settingsBtn.click();
+  await expect(settingsBtn).toHaveAttribute('aria-expanded', 'true');
+  await expect(settingsPopover).toBeVisible();
+  await expect(bottomDock.locator('select')).toHaveCount(0);
+
+  await ownerRoom.getByTestId('settings-fps-30').click();
+  await expect(settingsBtn).toContainText(/30\s*FPS/i);
   await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/30\s*fps/i);
   await expect.poll(() => readObservedTrackFps(ownerRoom)).toBe(30);
 
-  await fpsBtn.click();
-  await expect(fpsBtn).toContainText(/120\s*FPS/i);
+  await ownerRoom.getByTestId('settings-fps-120').click();
+  await expect(settingsBtn).toContainText(/120\s*FPS/i);
   await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/120\s*fps/i);
   await expect.poll(() => readObservedTrackFps(ownerRoom)).toBe(120);
 
-  const resBtn = ownerRoom.getByTestId('resolution-toggle-btn');
-  await expect(resBtn).toContainText(/1080p/i);
-  await resBtn.click();
-  await expect(resBtn).toContainText(/720p/i);
+  await ownerRoom.getByTestId('settings-resolution-720p').click();
+  await expect(settingsBtn).toContainText(/720p/i);
   await expect(ownerRoom.getByTestId('stream-tile').first()).toContainText(/720p/i);
-  await resBtn.click();
-  await expect(resBtn).toContainText(/Native/i);
+
+  await ownerRoom.getByTestId('settings-resolution-source').click();
+  await expect(settingsBtn).toContainText(/Native/i);
 
   // Turning self-preview off returns to lightweight live broadcast card without stopping capture
   await ownerRoom.getByTestId('dock-self-preview-btn').click();
   await expect(ownerRoom.getByTestId('stream-tile')).toHaveCount(0);
   await expect(ownerRoom.getByTestId('local-stream-hidden-card')).toBeVisible();
 
-  const metricsBadge = ownerRoom.getByTestId('system-metrics-badge');
-  await expect(metricsBadge).toBeVisible();
-  await expect(metricsBadge).toContainText(/CPU\s+\d+%.*RAM\s+\d+MB.*\d+\s*FPS/i);
+  // Clicking outside closes the floating settings popover; Escape also closes it cleanly
+  await ownerRoom.getByRole('heading', { name: /you are live/i }).click();
+  await expect(settingsPopover).toBeHidden();
+  await expect(settingsBtn).toHaveAttribute('aria-expanded', 'false');
+
+  await settingsBtn.click();
+  await expect(settingsPopover).toBeVisible();
+  await ownerRoom.keyboard.press('Escape');
+  await expect(settingsPopover).toBeHidden();
+
+  // Verify CPU/RAM/FPS telemetry in Hub Side Panel Telemetry & Stats tab
+  await ownerRoom.getByTestId('toggle-telemetry-panel-btn').click();
+  const telemetryPanel = ownerRoom.getByTestId('telemetry-panel');
+  await expect(telemetryPanel).toBeVisible();
+  await expect(telemetryPanel).toContainText(/CPU\s*\(\d+T\)\s*\d+%/i);
+  await expect(telemetryPanel).toContainText(/RAM.*\d+\.\d+\s*\/\s*\d+\.\d+\s*GB/i);
+  await expect(telemetryPanel.getByTestId('telemetry-fps-chart')).toContainText(/Target:\s*120\s*FPS/i);
 });
 
 test('Test 6 — Minimize Active Hub Without Exiting', async ({ browser }) => {
@@ -465,7 +506,7 @@ test('Test 6 — Minimize Active Hub Without Exiting', async ({ browser }) => {
   await ownerRoom.getByTestId('toggle-share-btn').click();
   await waitForContinuousPlayback(guestRoom, 1, 600);
 
-  await ownerRoom.getByTestId('minimize-hub-btn').click();
+  await ownerRoom.getByTestId('minimize-window-btn').click();
   await expect(ownerRoom.getByTestId('watch-room-minimized-bar')).toBeVisible();
   await expect(ownerCompanionHome.getByTestId('minimized-hub-banner')).toBeVisible();
 
@@ -728,7 +769,7 @@ test('Test 11 — Dock Right-Click Context Menu & Connection Failure Diagnostics
   const phantomHub = 'elfy/hub/PhantomHost_9999';
   const phantomRoom = await knockGuestIntoHub(guestPage, phantomHub);
 
-  await expect(phantomRoom.getByText('Connected')).toBeVisible();
+  await expect(phantomRoom.locator('[data-signaling-connected="true"]')).toBeVisible();
   await phantomRoom.waitForTimeout(250);
 
   await ownerRoom.evaluate(
@@ -871,8 +912,13 @@ test('Test 12 — Automatic Hardware-First Codec Selection Without User Picker',
   await ownerRoom.getByTestId('toggle-share-btn').click();
   await waitForContinuousPlayback(guestRoom, 1, 800);
 
-  // Confirm no manual codec picker is exposed to the user in the dock
+  // Confirm no manual codec picker is exposed to the user in the dock or settings popover
   await expect(ownerRoom.getByTestId('bottom-dock').locator('select')).toHaveCount(0);
+  await ownerRoom.getByTestId('stream-settings-btn').click();
+  await expect(ownerRoom.getByTestId('stream-settings-popover')).toBeVisible();
+  await expect(ownerRoom.getByTestId('bottom-dock').locator('select')).toHaveCount(0);
+  await ownerRoom.keyboard.press('Escape');
+  await expect(ownerRoom.getByTestId('stream-settings-popover')).toBeHidden();
 
   // Confirm hardware-efficient H.264 was ranked at index 0 when setCodecPreferences ran
   const appliedLists = await ownerRoom.evaluate(() => {
@@ -1197,6 +1243,19 @@ test('Test 14 — Telemetry Charts, Time Windows, Layout Modes & Responsive Side
     await expect(ownerRoom.getByTestId('multi-stream-hub')).toBeVisible();
     await expect(ownerRoom.getByTestId('bottom-dock')).toBeVisible();
     await assertNoHorizontalOverflow(ownerRoom);
+
+    await ownerRoom.getByTestId('stream-settings-btn').click();
+    const popover = ownerRoom.getByTestId('stream-settings-popover');
+    await expect(popover).toBeVisible();
+    const popoverBox = await popover.boundingBox();
+    expect(popoverBox).not.toBeNull();
+    if (popoverBox) {
+      expect(popoverBox.x).toBeGreaterThanOrEqual(0);
+      expect(popoverBox.x + popoverBox.width).toBeLessThanOrEqual(vp.width + 1);
+    }
+    await assertNoHorizontalOverflow(ownerRoom);
+    await ownerRoom.keyboard.press('Escape');
+    await expect(popover).toBeHidden();
 
     await ownerRoom.getByTestId('toggle-participants-panel-btn').click();
     await expect(ownerRoom.getByTestId('hub-side-panel')).toBeVisible();

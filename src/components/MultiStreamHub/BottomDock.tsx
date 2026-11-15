@@ -1,11 +1,6 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import styles from './BottomDock.module.css';
-import {
-  StreamFpsOption,
-  StreamResolutionPreset,
-  SystemMetricsDto,
-  WatchLayoutMode,
-} from '../../domain/dtos';
+import { StreamFpsOption, StreamResolutionPreset } from '../../domain/dtos';
 import { formatResolutionLabel } from '../../hooks/room/roomHelpers';
 import { DockContextMenu, useDockContextMenu } from '../DockContextMenu/DockContextMenu';
 
@@ -17,43 +12,23 @@ interface BottomDockProps {
   onToggleShare: () => void | Promise<void>;
   onToggleLocalPreview: () => void;
   fps: StreamFpsOption;
-  onToggleFps: () => void | Promise<void>;
+  onSetFps: (fps: StreamFpsOption) => void | Promise<void>;
   resolution: StreamResolutionPreset;
-  onCycleResolution: () => void | Promise<void>;
-  layoutMode: WatchLayoutMode;
-  onToggleLayout: () => void;
-  onMinimizeHub: () => void | Promise<void>;
-  systemMetrics: SystemMetricsDto;
+  onSetResolution: (resolution: StreamResolutionPreset) => void | Promise<void>;
   onLeaveHub: () => void | Promise<void>;
 }
+
+const FPS_OPTIONS: readonly StreamFpsOption[] = [30, 60, 120];
+
+const RESOLUTION_OPTIONS: ReadonlyArray<{ value: StreamResolutionPreset; label: string }> = [
+  { value: '720p', label: '720p' },
+  { value: '1080p', label: '1080p' },
+  { value: 'source', label: 'Native' },
+];
 
 const getVolumeIcon = (isDeafened: boolean): string => {
   if (isDeafened) return 'headset_off';
   return 'headphones';
-};
-
-const formatEncoderSuffix = (metrics: SystemMetricsDto): string => {
-  const effectiveKbps =
-    metrics.outboundBitrateKbps > 0 ? metrics.outboundBitrateKbps : metrics.inboundBitrateKbps;
-  if (!metrics.activeCodec && effectiveKbps <= 0 && metrics.rttMs <= 0) return '';
-
-  const accelPrefix =
-    metrics.isHardwareAccelerated === true
-      ? 'HW'
-      : metrics.isHardwareAccelerated === false
-        ? 'SW'
-        : '';
-  const codecPart = [accelPrefix, metrics.activeCodec].filter(Boolean).join(' ');
-  const mbpsPart = effectiveKbps > 0 ? `${(effectiveKbps / 1000).toFixed(1)}Mbps` : '';
-  const rttPart = metrics.rttMs > 0 ? `${Math.round(metrics.rttMs)}ms` : '';
-  const combined = [codecPart, mbpsPart, rttPart].filter(Boolean).join(' · ');
-  return combined ? ` · ${combined}` : '';
-};
-
-const getLayoutMeta = (layoutMode: WatchLayoutMode): { icon: string; label: string } => {
-  if (layoutMode === 'spotlight') return { icon: 'view_sidebar', label: 'Spotlight' };
-  if (layoutMode === 'focus') return { icon: 'center_focus_strong', label: 'Focus' };
-  return { icon: 'grid_view', label: 'Grid' };
 };
 
 export const BottomDock: React.FC<BottomDockProps> = ({
@@ -64,23 +39,40 @@ export const BottomDock: React.FC<BottomDockProps> = ({
   onToggleShare,
   onToggleLocalPreview,
   fps,
-  onToggleFps,
+  onSetFps,
   resolution,
-  onCycleResolution,
-  layoutMode,
-  onToggleLayout,
-  onMinimizeHub,
-  systemMetrics,
+  onSetResolution,
   onLeaveHub,
 }) => {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const settingsBtnRef = useRef<HTMLButtonElement | null>(null);
   const { menuPosition, closeMenu, handleDockContextMenu } = useDockContextMenu();
-  const cpuPct = Math.round(systemMetrics.cpuUsagePercent);
-  const ramMb = Math.round(systemMetrics.memoryUsedMb);
-  const effectiveFps = Math.round(
-    systemMetrics.outboundFps || systemMetrics.inboundFps || fps
-  );
-  const encoderSuffix = formatEncoderSuffix(systemMetrics);
-  const layoutMeta = getLayoutMeta(layoutMode);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+
+    const handlePointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null;
+      if (settingsAnchorRef.current && target && !settingsAnchorRef.current.contains(target)) {
+        setSettingsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return;
+      setSettingsOpen(false);
+      settingsBtnRef.current?.focus();
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [settingsOpen]);
 
   return (
     <>
@@ -127,113 +119,136 @@ export const BottomDock: React.FC<BottomDockProps> = ({
               <span>{isSharing ? 'Stop Sharing' : 'Share Screen'}</span>
             </button>
 
-            {isSharing && (
+            <div className={styles.settingsAnchor} ref={settingsAnchorRef}>
+              {settingsOpen && (
+                <div
+                  aria-label="Stream settings"
+                  className={styles.settingsPopover}
+                  data-testid="stream-settings-popover"
+                  role="dialog"
+                >
+                  <div className={styles.popoverHeader}>
+                    <span className={styles.popoverTitle}>Stream Settings</span>
+                    <span className={styles.popoverSummary}>
+                      {formatResolutionLabel(resolution)} · {fps} FPS
+                    </span>
+                  </div>
+
+                  <div className={styles.popoverSection}>
+                    <span className={styles.popoverLabel}>Frame Rate</span>
+                    <div className={styles.segmentedGroup} role="group" aria-label="Frame rate">
+                      {FPS_OPTIONS.map((option) => (
+                        <button
+                          key={option}
+                          aria-pressed={fps === option}
+                          className={`${styles.segmentedOption} ${
+                            fps === option ? styles.segmentedOptionActive : ''
+                          }`}
+                          data-testid={`settings-fps-${option}`}
+                          onClick={() => void onSetFps(option)}
+                          type="button"
+                        >
+                          {option} FPS
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className={styles.popoverSection}>
+                    <span className={styles.popoverLabel}>Quality</span>
+                    <div className={styles.segmentedGroup} role="group" aria-label="Resolution quality">
+                      {RESOLUTION_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          aria-pressed={resolution === option.value}
+                          className={`${styles.segmentedOption} ${
+                            resolution === option.value ? styles.segmentedOptionActive : ''
+                          }`}
+                          data-testid={`settings-resolution-${option.value}`}
+                          onClick={() => void onSetResolution(option.value)}
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {isSharing && (
+                    <>
+                      <div className={styles.popoverDivider} />
+                      <button
+                        aria-pressed={isLocalPreviewEnabled}
+                        className={`${styles.previewToggleBtn} ${
+                          isLocalPreviewEnabled ? styles.previewToggleBtnActive : ''
+                        }`}
+                        data-testid="dock-self-preview-btn"
+                        onClick={onToggleLocalPreview}
+                        title={
+                          isLocalPreviewEnabled
+                            ? 'Hide Self-Preview (saves GPU & RAM)'
+                            : 'Preview My Stream locally (uses extra GPU & RAM)'
+                        }
+                        type="button"
+                      >
+                        <span className={styles.previewToggleLeft}>
+                          <span className="material-symbols-outlined" style={{ fontSize: '17px' }}>
+                            {isLocalPreviewEnabled ? 'visibility' : 'visibility_off'}
+                          </span>
+                          <span>Self-Preview</span>
+                        </span>
+                        <span
+                          className={`${styles.previewStateBadge} ${
+                            isLocalPreviewEnabled ? styles.previewStateBadgeOn : ''
+                          }`}
+                        >
+                          {isLocalPreviewEnabled ? 'On' : 'Off'}
+                        </span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
               <button
-                aria-pressed={isLocalPreviewEnabled}
-                className={`${styles.modeBtn} ${isLocalPreviewEnabled ? styles.modeBtnActive : ''}`}
-                data-testid="dock-self-preview-btn"
-                onClick={onToggleLocalPreview}
-                title={
-                  isLocalPreviewEnabled
-                    ? 'Hide Self-Preview (saves GPU & RAM)'
-                    : 'Preview My Stream locally (uses extra GPU & RAM)'
-                }
+                ref={settingsBtnRef}
+                aria-expanded={settingsOpen}
+                aria-haspopup="dialog"
+                aria-label="Stream settings"
+                className={`${styles.settingsBtn} ${settingsOpen ? styles.settingsBtnActive : ''}`}
+                data-testid="stream-settings-btn"
+                onClick={() => setSettingsOpen((prev) => !prev)}
+                title="Stream quality, FPS & preview settings"
                 type="button"
               >
-                <span className={`material-symbols-outlined ${styles.modeIcon}`} style={{ fontSize: '17px' }}>
-                  {isLocalPreviewEnabled ? 'visibility' : 'visibility_off'}
+                <span className={styles.settingsChipText}>
+                  {formatResolutionLabel(resolution)} · {fps} FPS
                 </span>
-                <span className={styles.modeLabel}>
-                  {isLocalPreviewEnabled ? 'Preview On' : 'Preview'}
+                <span
+                  className={`material-symbols-outlined ${styles.settingsGearIcon}`}
+                  style={{ fontSize: '17px' }}
+                >
+                  settings
                 </span>
               </button>
-            )}
-
-            <button
-              className={`${styles.pillBtn} ${fps === 30 ? styles.pillBtnEconomy : ''}`}
-              data-testid="fps-toggle-btn"
-              onClick={() => void onToggleFps()}
-              title="Cycle stream frame rate: 60 / 30 / 120 FPS"
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                speed
-              </span>
-              <span>{fps} FPS</span>
-            </button>
-
-            <button
-              className={`${styles.pillBtn} ${resolution === '720p' ? styles.pillBtnEconomy : ''}`}
-              data-testid="resolution-toggle-btn"
-              onClick={() => void onCycleResolution()}
-              title="Cycle capture resolution: 1080p / 720p / Native"
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
-                high_quality
-              </span>
-              <span>{formatResolutionLabel(resolution)}</span>
-            </button>
-
-            <button
-              className={styles.modeBtn}
-              data-testid="layout-toggle-btn"
-              onClick={onToggleLayout}
-              title="Toggle Grid / Spotlight View"
-              type="button"
-            >
-              <span className={`material-symbols-outlined ${styles.modeIcon}`} style={{ fontSize: '17px' }}>
-                {layoutMeta.icon}
-              </span>
-              <span className={styles.modeLabel}>{layoutMeta.label}</span>
-            </button>
-
-            <button
-              aria-label="Minimize Hub"
-              className={styles.iconBtn}
-              data-testid="minimize-hub-btn"
-              onClick={() => void onMinimizeHub()}
-              title="Minimize Hub Without Disconnecting"
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                picture_in_picture_alt
-              </span>
-            </button>
+            </div>
           </div>
 
           <div className={styles.dockDivider} />
 
-          <div className={styles.rightControls}>
-            <div
-              className={`${styles.metricsBadge} ${systemMetrics.highLoadWarning ? styles.metricsBadgeHigh : ''}`}
-              data-testid="system-metrics-badge"
-              title={
-                systemMetrics.encoderImplementation
-                  ? `Encoder: ${systemMetrics.encoderImplementation}`
-                  : 'Host CPU, Memory, FPS & Encoder Telemetry'
-              }
-            >
-              <span className={styles.metricsDot} />
-              <span className={styles.metricsText}>
-                CPU {cpuPct}% · RAM {ramMb}MB · {effectiveFps} FPS{encoderSuffix}
-              </span>
-            </div>
-
-            <button
-              aria-label="Disconnect & Leave Room"
-              className={styles.leaveBtn}
-              data-testid="leave-hub-btn"
-              onClick={() => void onLeaveHub()}
-              title="Disconnect & Leave Room"
-              type="button"
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                call_end
-              </span>
-              <span className={styles.leaveLabel}>Leave</span>
-            </button>
-          </div>
+          <button
+            aria-label="Disconnect & Leave Room"
+            className={styles.leaveBtn}
+            data-testid="leave-hub-btn"
+            onClick={() => void onLeaveHub()}
+            title="Disconnect & Leave Room"
+            type="button"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
+              call_end
+            </span>
+            <span className={styles.leaveLabel}>Leave</span>
+          </button>
         </div>
       </footer>
       <DockContextMenu position={menuPosition} onClose={closeMenu} />

@@ -46,9 +46,7 @@ interface MultiStreamHubProps {
   onToggleShare: () => void | Promise<void>;
   onToggleLocalPreview: () => void;
   onSetFps: (fps: StreamFpsOption) => void | Promise<void>;
-  onToggleFps: () => void | Promise<void>;
   onSetResolution: (resolution: StreamResolutionPreset) => void | Promise<void>;
-  onCycleResolution: () => void | Promise<void>;
   onSetStreamVolume: (streamId: string, volume: number) => void;
   onToggleDeafen: () => void;
   onToggleLayout: () => void;
@@ -56,7 +54,6 @@ interface MultiStreamHubProps {
   onSelectSpotlightStream: (streamId: string) => void;
   onEnterFullscreen: (streamId?: string) => void | Promise<void>;
   onExitFullscreen: () => void | Promise<void>;
-  onMinimizeHub: () => void | Promise<void>;
   onLeaveHub: () => void | Promise<void>;
   onKickPeer: (peerIdSafe: string, reason?: string) => void | Promise<void>;
   onRetryConnection?: () => void;
@@ -109,9 +106,7 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   onToggleShare,
   onToggleLocalPreview,
   onSetFps,
-  onToggleFps,
   onSetResolution,
-  onCycleResolution,
   onSetStreamVolume,
   onToggleDeafen,
   onToggleLayout,
@@ -119,7 +114,6 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   onSelectSpotlightStream,
   onEnterFullscreen,
   onExitFullscreen,
-  onMinimizeHub,
   onLeaveHub,
   onKickPeer,
   onRetryConnection,
@@ -430,13 +424,9 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
             onToggleShare={onToggleShare}
             onToggleLocalPreview={onToggleLocalPreview}
             fps={fps}
-            onToggleFps={onToggleFps}
+            onSetFps={onSetFps}
             resolution={resolution}
-            onCycleResolution={onCycleResolution}
-            layoutMode={layoutMode}
-            onToggleLayout={onToggleLayout}
-            onMinimizeHub={onMinimizeHub}
-            systemMetrics={systemMetrics}
+            onSetResolution={onSetResolution}
             onLeaveHub={onLeaveHub}
           />
         </div>

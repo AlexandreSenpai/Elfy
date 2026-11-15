@@ -418,9 +418,7 @@ export const StreamViewerPage: React.FC = () => {
         onToggleShare={session.toggleSharing}
         onToggleLocalPreview={session.toggleLocalPreview}
         onSetFps={session.setFps}
-        onToggleFps={session.toggleFps}
         onSetResolution={session.setResolution}
-        onCycleResolution={session.cycleResolution}
         onSetStreamVolume={session.setStreamVolume}
         onToggleDeafen={session.toggleDeafen}
         onToggleLayout={session.toggleLayoutMode}
@@ -428,7 +426,6 @@ export const StreamViewerPage: React.FC = () => {
         onSelectSpotlightStream={session.selectSpotlightStream}
         onEnterFullscreen={session.enterFullscreen}
         onExitFullscreen={session.exitFullscreen}
-        onMinimizeHub={session.minimizeHub}
         onLeaveHub={handleLeaveRoom}
         onKickPeer={session.kickPeer}
         onRetryConnection={session.retryConnection}
@@ -447,13 +444,13 @@ export const StreamViewerPage: React.FC = () => {
     !session.isMinimized;
 
   return (
-    <div className={styles.streamContainer}>
+    <div
+      className={styles.streamContainer}
+      data-signaling-connected={String(session.isConnected)}
+    >
       <Header
         profile={profile}
         roomTitle={session.hubId || activeHubSlug}
-        activeStreamsCount={session.streams.length}
-        rttMs={session.systemMetrics.rttMs}
-        isConnected={session.isConnected}
         layoutMode={isMultiStreamRendered ? session.layoutMode : undefined}
         onSelectLayoutMode={isMultiStreamRendered ? session.setLayoutMode : undefined}
         peers={isMultiStreamRendered ? session.peers : undefined}
