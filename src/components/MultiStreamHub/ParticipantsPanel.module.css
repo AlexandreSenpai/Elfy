@@ -269,6 +269,34 @@
   color: #ffffff;
 }
 
+.telemetryIconBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(123, 208, 255, 0.3);
+  background-color: rgba(123, 208, 255, 0.1);
+  color: var(--secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.telemetryIconBtn:hover:not(:disabled) {
+  background-color: rgba(123, 208, 255, 0.24);
+  border-color: var(--secondary);
+  color: #ffffff;
+}
+
+.telemetryIconBtn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: var(--outline-variant);
+  background-color: rgba(255, 255, 255, 0.04);
+  color: var(--on-surface-muted);
+}
+
 /* Audio row */
 .audioRow {
   display: flex;
@@ -388,68 +416,4 @@
 
 .lossWarn {
   color: var(--tertiary-dim);
-}
-
-/* Footer invite card */
-.inviteCard {
-  margin: 0 12px 12px;
-  padding: 10px 12px;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, rgba(255, 77, 109, 0.12), rgba(17, 24, 34, 0.92));
-  border: 1px solid rgba(255, 77, 109, 0.28);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.inviteMeta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.inviteTitle {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--on-surface);
-}
-
-.inviteSubtitle {
-  font-size: 11px;
-  color: var(--on-surface-variant);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.inviteBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  border-radius: var(--radius-full);
-  background-color: var(--primary);
-  color: #ffffff;
-  border: none;
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  flex-shrink: 0;
-  transition: background-color 0.18s ease, transform 0.18s ease;
-}
-
-.inviteBtn:hover {
-  background-color: var(--primary-hover);
-  transform: translateY(-1px);
-}
-
-.inviteBtnCopied {
-  background-color: #10b981;
-}
-
-.inviteBtnCopied:hover {
-  background-color: #059669;
 }

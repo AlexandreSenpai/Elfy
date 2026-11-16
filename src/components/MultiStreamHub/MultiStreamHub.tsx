@@ -17,7 +17,7 @@ import { ConnectionFailureBanner } from '../ConnectionFailureBanner/ConnectionFa
 import { StreamTile } from './StreamTile';
 import { BottomDock } from './BottomDock';
 import { FullscreenStreamViewer } from './FullscreenStreamViewer';
-import { HubSidePanel, HubSidePanelTab } from './HubSidePanel';
+import { HubSidePanel } from './HubSidePanel';
 
 interface MultiStreamHubProps {
   hubId: string;
@@ -35,13 +35,14 @@ interface MultiStreamHubProps {
   layoutMode: WatchLayoutMode;
   spotlightStreamId: string | null;
   fullscreenStreamId: string | null;
-  activePanelTab: HubSidePanelTab | null;
+  isPanelOpen: boolean;
+  inspectedTelemetryPeerId: string | null;
   systemMetrics: SystemMetricsDto;
   telemetryHistory: TelemetryHistoryPointDto[];
   peerTelemetryHistory: Record<string, PeerTelemetryHistoryPointDto[]>;
   highLoadSuggestion: string | null;
   connectionFailure?: ConnectionFailureDto | null;
-  onChangePanelTab: (tab: HubSidePanelTab) => void;
+  onSelectTelemetryPeer: (peerIdSafe: string | null) => void;
   onClosePanel: () => void;
   onToggleShare: () => void | Promise<void>;
   onToggleLocalPreview: () => void;
@@ -95,13 +96,14 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
   layoutMode,
   spotlightStreamId,
   fullscreenStreamId,
-  activePanelTab,
+  isPanelOpen,
+  inspectedTelemetryPeerId,
   systemMetrics,
   telemetryHistory,
   peerTelemetryHistory,
   highLoadSuggestion,
   connectionFailure = null,
-  onChangePanelTab,
+  onSelectTelemetryPeer,
   onClosePanel,
   onToggleShare,
   onToggleLocalPreview,
@@ -432,13 +434,13 @@ export const MultiStreamHub: React.FC<MultiStreamHubProps> = ({
         </div>
 
         <HubSidePanel
-          isOpen={activePanelTab !== null}
-          activeTab={activePanelTab ?? 'participants'}
-          onChangeTab={onChangePanelTab}
+          isOpen={isPanelOpen}
+          inspectedPeerIdSafe={inspectedTelemetryPeerId}
+          onSelectTelemetryPeer={onSelectTelemetryPeer}
           onClose={onClosePanel}
-          hubId={hubId}
           localPeerIdSafe={localPeerIdSafe}
           localRole={localRole}
+          isSharing={isSharing}
           peers={peers}
           streams={streams}
           streamVolumes={streamVolumes}

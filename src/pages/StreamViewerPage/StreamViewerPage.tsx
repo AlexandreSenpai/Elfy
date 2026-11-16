@@ -8,7 +8,6 @@ import { ConnectionFailureBanner } from '../../components/ConnectionFailureBanne
 import { GuestKnockGate } from '../../components/GuestKnockGate/GuestKnockGate';
 import { Header } from '../../components/Header/Header';
 import { HostKnockAlert } from '../../components/HostKnockAlert/HostKnockAlert';
-import { HubSidePanelTab } from '../../components/MultiStreamHub/HubSidePanel';
 import { MultiStreamHub } from '../../components/MultiStreamHub/MultiStreamHub';
 import { RoomRole } from '../../domain/dtos';
 import { useProfile } from '../../hooks/useProfile';
@@ -52,13 +51,15 @@ export const StreamViewerPage: React.FC = () => {
   const [overrideAutoStart, setOverrideAutoStart] = useState<boolean | null>(null);
   const [overrideJoinedAs, setOverrideJoinedAs] = useState<RoomRole | null>(null);
   const [isPersonaModalOpen, setIsPersonaModalOpen] = useState(false);
-  const [activePanelTab, setActivePanelTab] = useState<HubSidePanelTab | null>(null);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [inspectedTelemetryPeerId, setInspectedTelemetryPeerId] = useState<string | null>(null);
 
   useEffect(() => {
     setOverrideHubSlug(null);
     setOverrideAutoStart(null);
     setOverrideJoinedAs(null);
-    setActivePanelTab(null);
+    setIsPanelOpen(false);
+    setInspectedTelemetryPeerId(null);
   }, [urlHubId, urlAutoStart, urlJoinedAs]);
 
   useEffect(() => {
@@ -94,7 +95,8 @@ export const StreamViewerPage: React.FC = () => {
       setOverrideHubSlug(targetNormalized && targetNormalized === urlNormalized ? null : targetHub);
       setOverrideAutoStart(Boolean(event.payload.autoStart));
       setOverrideJoinedAs(event.payload.joinedAs ?? null);
-      setActivePanelTab(null);
+      setIsPanelOpen(false);
+      setInspectedTelemetryPeerId(null);
       sessionActionsRef.current.rejoinRoom();
       if (sessionActionsRef.current.isMinimized) {
         void sessionActionsRef.current.restoreHub();
@@ -205,7 +207,8 @@ export const StreamViewerPage: React.FC = () => {
 
   useEffect(() => {
     if (session.kickedReason || session.hasLeftRoom || session.isMinimized) {
-      setActivePanelTab(null);
+      setIsPanelOpen(false);
+      setInspectedTelemetryPeerId(null);
     }
   }, [session.hasLeftRoom, session.isMinimized, session.kickedReason]);
 
@@ -231,7 +234,8 @@ export const StreamViewerPage: React.FC = () => {
 
   const handleLeaveRoom = async (): Promise<void> => {
     closingOnLeaveRef.current = true;
-    setActivePanelTab(null);
+    setIsPanelOpen(false);
+    setInspectedTelemetryPeerId(null);
     session.clearKickedState();
     await session.leaveRoom();
     await handleBackToFriendHubs();
@@ -239,14 +243,16 @@ export const StreamViewerPage: React.FC = () => {
 
   const handleCloseWindow = async (): Promise<void> => {
     closingOnLeaveRef.current = true;
-    setActivePanelTab(null);
+    setIsPanelOpen(false);
+    setInspectedTelemetryPeerId(null);
     session.clearKickedState();
     await session.leaveRoom();
     await handleBackToFriendHubs();
   };
 
   const handleReturnFromKick = async (): Promise<void> => {
-    setActivePanelTab(null);
+    setIsPanelOpen(false);
+    setInspectedTelemetryPeerId(null);
     session.clearKickedState();
     await handleBackToFriendHubs();
   };
@@ -265,8 +271,26 @@ export const StreamViewerPage: React.FC = () => {
     setIsPersonaModalOpen(true);
   };
 
-  const handleTogglePanelTab = useCallback((tab: HubSidePanelTab): void => {
-    setActivePanelTab((prev) => (prev === tab ? null : tab));
+  const handleTogglePanel = useCallback((): void => {
+    setIsPanelOpen((prev) => {
+      if (prev) {
+        setInspectedTelemetryPeerId(null);
+        return false;
+      }
+      return true;
+    });
+  }, []);
+
+  const handleSelectTelemetryPeer = useCallback((peerIdSafe: string | null): void => {
+    setInspectedTelemetryPeerId(peerIdSafe);
+    if (peerIdSafe !== null) {
+      setIsPanelOpen(true);
+    }
+  }, []);
+
+  const handleClosePanel = useCallback((): void => {
+    setIsPanelOpen(false);
+    setInspectedTelemetryPeerId(null);
   }, []);
 
   const renderMainContent = () => {
@@ -407,14 +431,15 @@ export const StreamViewerPage: React.FC = () => {
         layoutMode={session.layoutMode}
         spotlightStreamId={session.spotlightStreamId}
         fullscreenStreamId={session.fullscreenStreamId}
-        activePanelTab={activePanelTab}
+        isPanelOpen={isPanelOpen}
+        inspectedTelemetryPeerId={inspectedTelemetryPeerId}
         systemMetrics={session.systemMetrics}
         telemetryHistory={session.telemetryHistory}
         peerTelemetryHistory={session.peerTelemetryHistory}
         highLoadSuggestion={session.highLoadSuggestion}
         connectionFailure={session.connectionFailure}
-        onChangePanelTab={setActivePanelTab}
-        onClosePanel={() => setActivePanelTab(null)}
+        onSelectTelemetryPeer={handleSelectTelemetryPeer}
+        onClosePanel={handleClosePanel}
         onToggleShare={session.toggleSharing}
         onToggleLocalPreview={session.toggleLocalPreview}
         onSetFps={session.setFps}
@@ -454,8 +479,8 @@ export const StreamViewerPage: React.FC = () => {
         layoutMode={isMultiStreamRendered ? session.layoutMode : undefined}
         onSelectLayoutMode={isMultiStreamRendered ? session.setLayoutMode : undefined}
         peers={isMultiStreamRendered ? session.peers : undefined}
-        activePanelTab={isMultiStreamRendered ? activePanelTab : null}
-        onTogglePanelTab={isMultiStreamRendered ? handleTogglePanelTab : undefined}
+        isPanelOpen={isMultiStreamRendered ? isPanelOpen : false}
+        onTogglePanel={isMultiStreamRendered ? handleTogglePanel : undefined}
         onMinimizeHub={
           !session.hasLeftRoom && !session.kickedReason && !session.isMinimized
             ? session.minimizeHub

@@ -1,17 +1,36 @@
-import { PeerTelemetryDto, StreamQualityLimitationReason } from '../../domain/dtos';
+import { EMPTY_AUDIO_TELEMETRY } from '../../domain/config';
+import {
+  AudioTelemetryDto,
+  PeerTelemetryDto,
+  StreamQualityLimitationReason,
+} from '../../domain/dtos';
 import { WebRtcStatsSnapshot } from '../../ports';
+import {
+  AudioDirectionAccumulator,
+  AudioTrackMeta,
+  ReceivingAudioTrackState,
+  averageStat,
+  createAudioDirectionAccumulator,
+  finalizeAudioTelemetry,
+  getReceivingAudioTrackState,
+  normalizeCodecLabel,
+  readAudioTrackMetadata,
+  readVideoTrackMetadata,
+  resolveAudioCodecDetails,
+  roundStat,
+  updateJitterBufferDeltaMs,
+} from './mediaTrackStats';
 import {
   BitrateSample,
   PacketLossSample,
   PeerEntry,
-  StatsAccumulator,
   StatsSampleTracker,
   createStatsSampleTracker,
 } from './peerTypes';
 
-const HW_ENCODER_PATTERN =
-  /mediafoundation|nvenc|qsv|quicksync|amf|vce|vaapi|videotoolbox|mediacodec|externalencoder/i;
-const SW_ENCODER_PATTERN = /libvpx|openh264|libaom|ffmpeg|software/i;
+const HW_CODEC_PATTERN =
+  /mediafoundation|nvenc|qsv|quicksync|amf|vce|vaapi|videotoolbox|mediacodec|externalencoder|externaldecoder|d3d11|dxva/i;
+const SW_CODEC_PATTERN = /libvpx|openh264|libaom|ffmpeg|software|dav1d/i;
 
 const LIMITATION_PRIORITY: Record<StreamQualityLimitationReason, number> = {
   none: 0,
@@ -28,53 +47,103 @@ interface CandidatePairRtt {
 
 interface PeerStatsAccumulator {
   outboundBitrateKbps: number;
-  inboundBitrateKbps: number;
   outboundFps: number;
+  outboundWidth: number;
+  outboundHeight: number;
+  outboundCodec: string;
+  encoderImplementation: string;
+  isEncoderHardwareAccelerated: boolean | null;
+  outboundQualityLimitationReason: StreamQualityLimitationReason;
+  outboundAudio: AudioDirectionAccumulator;
+  inboundBitrateKbps: number;
   inboundFps: number;
+  inboundWidth: number;
+  inboundHeight: number;
+  inboundDroppedFrames: number;
+  inboundCodec: string;
+  decoderImplementation: string;
+  isDecoderHardwareAccelerated: boolean | null;
+  inboundAudio: AudioDirectionAccumulator;
   selectedPairId: string;
+  dtlsState: string;
   candidatePairs: CandidatePairRtt[];
   remoteInboundRttMs: number[];
   videoLossSamples: number[];
-  audioLossSamples: number[];
   jitterMsSamples: number[];
+}
+
+interface GlobalAccumulator {
+  outboundFps: number;
+  inboundFps: number;
+  outboundWidth: number;
+  outboundHeight: number;
+  droppedFrames: number;
+  rttMs: number;
+  rttSamples: number;
+  activeCodec: string;
+  isHardwareAccelerated: boolean | null;
+  encoderImplementation: string;
+  qualityLimitationReason: StreamQualityLimitationReason;
+  outboundBitrateKbps: number;
+  inboundBitrateKbps: number;
+  packetLossPercentTotal: number;
+  packetLossSamples: number;
+  jitterMsTotal: number;
+  jitterSamples: number;
+  audioCodec: string;
+  inboundAudioBitrateTotal: number;
+  outboundAudioBitrates: number[];
+  outboundAudioCodec: string;
+  outboundAudioSampleRateHz: number;
+  outboundAudioChannels: number;
+  outboundAudioHasRtp: boolean;
+  outboundAudioPacketsLost: number;
+  outboundAudioLossSamples: number[];
+  outboundAudioJitterSamples: number[];
+  outboundAudioLevel: number | null;
+  audioJitterBufferMsTotal: number;
+  audioJitterBufferSamples: number;
+  audioPacketsLost: number;
+  peerStats: Record<string, PeerTelemetryDto>;
 }
 
 interface StatContext {
   peerIdSafe: string;
+  entry: PeerEntry;
   report: RTCStatsReport;
   tracker: StatsSampleTracker;
-  acc: StatsAccumulator;
+  acc: GlobalAccumulator;
   peerAcc: PeerStatsAccumulator;
+  localAudioMeta: AudioTrackMeta;
+  receivingAudioState: ReceivingAudioTrackState;
 }
 
 const createPeerAccumulator = (): PeerStatsAccumulator => ({
   outboundBitrateKbps: 0,
-  inboundBitrateKbps: 0,
   outboundFps: 0,
+  outboundWidth: 0,
+  outboundHeight: 0,
+  outboundCodec: '',
+  encoderImplementation: '',
+  isEncoderHardwareAccelerated: null,
+  outboundQualityLimitationReason: 'none',
+  outboundAudio: createAudioDirectionAccumulator(),
+  inboundBitrateKbps: 0,
   inboundFps: 0,
+  inboundWidth: 0,
+  inboundHeight: 0,
+  inboundDroppedFrames: 0,
+  inboundCodec: '',
+  decoderImplementation: '',
+  isDecoderHardwareAccelerated: null,
+  inboundAudio: createAudioDirectionAccumulator(),
   selectedPairId: '',
+  dtlsState: '',
   candidatePairs: [],
   remoteInboundRttMs: [],
   videoLossSamples: [],
-  audioLossSamples: [],
   jitterMsSamples: [],
 });
-
-const roundTo = (value: number, decimals: number): number => {
-  if (!Number.isFinite(value)) return 0;
-  const factor = 10 ** decimals;
-  return Math.round(value * factor) / factor;
-};
-
-const average = (values: number[]): number => {
-  if (values.length === 0) return 0;
-  return values.reduce((sum, val) => sum + val, 0) / values.length;
-};
-
-const normalizeCodecLabel = (mimeType: unknown): string => {
-  if (typeof mimeType !== 'string' || !mimeType.trim()) return '';
-  return mimeType.replace(/^(?:video|audio)\//i, '').trim().toUpperCase();
-};
 
 const normalizeQualityLimitation = (value: unknown): StreamQualityLimitationReason => {
   if (value === 'cpu' || value === 'bandwidth' || value === 'other' || value === 'none') {
@@ -83,17 +152,20 @@ const normalizeQualityLimitation = (value: unknown): StreamQualityLimitationReas
   return 'none';
 };
 
-/** Infers whether the active outbound encoder runs on GPU hardware vs CPU software. */
-export const inferHardwareEncoder = (
-  powerEfficientEncoder: unknown,
-  encoderImplementation: string
+/** Infers whether an encoder or decoder runs on GPU hardware vs CPU software. */
+export const inferHardwareAcceleration = (
+  powerEfficientFlag: unknown,
+  implementation: string
 ): boolean | null => {
-  if (typeof powerEfficientEncoder === 'boolean') return powerEfficientEncoder;
-  if (!encoderImplementation) return null;
-  if (HW_ENCODER_PATTERN.test(encoderImplementation)) return true;
-  if (SW_ENCODER_PATTERN.test(encoderImplementation)) return false;
+  if (typeof powerEfficientFlag === 'boolean') return powerEfficientFlag;
+  if (!implementation) return null;
+  if (HW_CODEC_PATTERN.test(implementation)) return true;
+  if (SW_CODEC_PATTERN.test(implementation)) return false;
   return null;
 };
+
+/** Backwards-compatible alias for encoder hardware classification tests/callers. */
+export const inferHardwareEncoder = inferHardwareAcceleration;
 
 const resolveReportCodecName = (report: RTCStatsReport, codecId: unknown): string => {
   if (typeof codecId !== 'string' || !codecId) return '';
@@ -164,24 +236,47 @@ const accumulateOutboundVideoStat = (stat: Record<string, unknown>, ctx: StatCon
   if (fps > acc.outboundFps) acc.outboundFps = fps;
   if (fps > peerAcc.outboundFps) peerAcc.outboundFps = fps;
 
-  const isActive = fps > 0 || Number(stat.bytesSent ?? 0) > 0 || Number(stat.framesSent ?? 0) > 0;
+  const width = Math.max(0, Math.round(Number(stat.frameWidth ?? 0)));
+  const height = Math.max(0, Math.round(Number(stat.frameHeight ?? 0)));
+  if (width > peerAcc.outboundWidth) peerAcc.outboundWidth = width;
+  if (height > peerAcc.outboundHeight) peerAcc.outboundHeight = height;
+  if (width > acc.outboundWidth) acc.outboundWidth = width;
+  if (height > acc.outboundHeight) acc.outboundHeight = height;
+
+  const isActive =
+    fps > 0 ||
+    Number(stat.bytesSent ?? 0) > 0 ||
+    Number(stat.framesSent ?? 0) > 0 ||
+    Number(stat.framesEncoded ?? 0) > 0;
   if (!isActive) return;
 
   const kbps = updateBitrateFromSample(peerIdSafe, stat, 'out', tracker.bitrate);
   acc.outboundBitrateKbps += kbps;
   peerAcc.outboundBitrateKbps += kbps;
 
-  if (!acc.activeCodec) acc.activeCodec = resolveReportCodecName(report, stat.codecId);
+  const codec = resolveReportCodecName(report, stat.codecId);
+  if (codec) {
+    if (!peerAcc.outboundCodec) peerAcc.outboundCodec = codec;
+    if (!acc.activeCodec) acc.activeCodec = codec;
+  }
 
   const impl = typeof stat.encoderImplementation === 'string' ? stat.encoderImplementation.trim() : '';
-  if (impl && !acc.encoderImplementation) acc.encoderImplementation = impl;
+  if (impl) {
+    if (!peerAcc.encoderImplementation) peerAcc.encoderImplementation = impl;
+    if (!acc.encoderImplementation) acc.encoderImplementation = impl;
+  }
 
-  const hwDetected = inferHardwareEncoder(stat.powerEfficientEncoder, impl);
+  const hwDetected = inferHardwareAcceleration(stat.powerEfficientEncoder, impl);
   if (hwDetected !== null) {
+    peerAcc.isEncoderHardwareAccelerated =
+      peerAcc.isEncoderHardwareAccelerated === false ? false : hwDetected;
     acc.isHardwareAccelerated = acc.isHardwareAccelerated === false ? false : hwDetected;
   }
 
   const limitation = normalizeQualityLimitation(stat.qualityLimitationReason);
+  if (LIMITATION_PRIORITY[limitation] > LIMITATION_PRIORITY[peerAcc.outboundQualityLimitationReason]) {
+    peerAcc.outboundQualityLimitationReason = limitation;
+  }
   if (LIMITATION_PRIORITY[limitation] > LIMITATION_PRIORITY[acc.qualityLimitationReason]) {
     acc.qualityLimitationReason = limitation;
   }
@@ -211,7 +306,15 @@ const accumulateInboundVideoStat = (stat: Record<string, unknown>, ctx: StatCont
   const fps = Number(stat.framesPerSecond ?? 0);
   if (fps > acc.inboundFps) acc.inboundFps = fps;
   if (fps > peerAcc.inboundFps) peerAcc.inboundFps = fps;
-  acc.droppedFrames += Math.max(0, Number(stat.framesDropped ?? 0));
+
+  const width = Math.max(0, Math.round(Number(stat.frameWidth ?? 0)));
+  const height = Math.max(0, Math.round(Number(stat.frameHeight ?? 0)));
+  if (width > peerAcc.inboundWidth) peerAcc.inboundWidth = width;
+  if (height > peerAcc.inboundHeight) peerAcc.inboundHeight = height;
+
+  const dropped = Math.max(0, Number(stat.framesDropped ?? 0));
+  acc.droppedFrames += dropped;
+  peerAcc.inboundDroppedFrames += dropped;
 
   const isActive =
     fps > 0 ||
@@ -223,7 +326,23 @@ const accumulateInboundVideoStat = (stat: Record<string, unknown>, ctx: StatCont
     const kbps = updateBitrateFromSample(peerIdSafe, stat, 'in', tracker.bitrate);
     acc.inboundBitrateKbps += kbps;
     peerAcc.inboundBitrateKbps += kbps;
-    if (!acc.activeCodec) acc.activeCodec = resolveReportCodecName(report, stat.codecId);
+
+    const codec = resolveReportCodecName(report, stat.codecId);
+    if (codec) {
+      if (!peerAcc.inboundCodec) peerAcc.inboundCodec = codec;
+      if (!acc.activeCodec) acc.activeCodec = codec;
+    }
+
+    const decoderImpl =
+      typeof stat.decoderImplementation === 'string' ? stat.decoderImplementation.trim() : '';
+    if (decoderImpl && !peerAcc.decoderImplementation) {
+      peerAcc.decoderImplementation = decoderImpl;
+    }
+    const hwDec = inferHardwareAcceleration(stat.powerEfficientDecoder, decoderImpl);
+    if (hwDec !== null) {
+      peerAcc.isDecoderHardwareAccelerated =
+        peerAcc.isDecoderHardwareAccelerated === false ? false : hwDec;
+    }
   }
 
   recordJitterSample(stat, isActive, peerAcc);
@@ -236,28 +355,75 @@ const accumulateAudioStat = (
   ctx: StatContext
 ): void => {
   const { peerIdSafe, report, tracker, acc, peerAcc } = ctx;
+  const audioAcc = direction === 'out' ? peerAcc.outboundAudio : peerAcc.inboundAudio;
   const bytes = Number((direction === 'out' ? stat.bytesSent : stat.bytesReceived) ?? 0);
   const packets = Number((direction === 'out' ? stat.packetsSent : stat.packetsReceived) ?? 0);
   const isActive = bytes > 0 || packets > 0;
 
-  if (isActive) {
-    acc.audioBitrateKbps += updateBitrateFromSample(peerIdSafe, stat, direction, tracker.bitrate);
-    if (!acc.audioCodec) acc.audioCodec = resolveReportCodecName(report, stat.codecId);
+  if (!isActive) return;
+
+  const kbps = updateBitrateFromSample(peerIdSafe, stat, direction, tracker.bitrate);
+  if (direction === 'out' && ctx.localAudioMeta.liveTrackCount === 0) {
+    return;
+  }
+  if (
+    direction === 'in' &&
+    ctx.receivingAudioState.hasAudioTransceivers &&
+    !ctx.receivingAudioState.hasAnyActiveReceiver
+  ) {
+    return;
   }
 
-  if (direction === 'out') return;
+  audioAcc.hasActiveRtp = true;
+  audioAcc.bitrateKbps += kbps;
 
-  acc.audioPacketsLost += Math.max(0, Number(stat.packetsLost ?? 0));
-  recordJitterSample(stat, isActive, peerAcc);
+  const codecInfo = resolveAudioCodecDetails(report, stat.codecId);
+  if (codecInfo.codec) {
+    if (!audioAcc.codec) audioAcc.codec = codecInfo.codec;
+    if (!acc.audioCodec) acc.audioCodec = codecInfo.codec;
+  }
+  if (codecInfo.sampleRateHz > 0 && audioAcc.sampleRateHz === 0) {
+    audioAcc.sampleRateHz = codecInfo.sampleRateHz;
+  }
+  if (codecInfo.channels > 0 && audioAcc.channels === 0) {
+    audioAcc.channels = codecInfo.channels;
+  }
 
-  const jbDelay = Number(stat.jitterBufferDelay ?? 0);
-  const jbEmitted = Number(stat.jitterBufferEmittedCount ?? 0);
-  if (Number.isFinite(jbDelay) && Number.isFinite(jbEmitted) && jbEmitted > 0 && jbDelay >= 0) {
-    acc.audioJitterBufferMsTotal += (jbDelay / jbEmitted) * 1000;
+  if (direction === 'out') {
+    if (typeof stat.mediaSourceId === 'string' && stat.mediaSourceId) {
+      const mediaSource = report.get(stat.mediaSourceId) as Record<string, unknown> | undefined;
+      if (typeof mediaSource?.audioLevel === 'number' && Number.isFinite(mediaSource.audioLevel)) {
+        audioAcc.audioLevel = mediaSource.audioLevel;
+      }
+    }
+    return;
+  }
+
+  acc.inboundAudioBitrateTotal += kbps;
+  const lost = Math.max(0, Number(stat.packetsLost ?? 0));
+  audioAcc.packetsLost += lost;
+  acc.audioPacketsLost += lost;
+
+  if (typeof stat.jitter === 'number' && Number.isFinite(stat.jitter) && stat.jitter >= 0) {
+    const jMs = stat.jitter * 1000;
+    audioAcc.jitterMsTotal += jMs;
+    audioAcc.jitterSamples += 1;
+    peerAcc.jitterMsSamples.push(jMs);
+  }
+
+  if (typeof stat.audioLevel === 'number' && Number.isFinite(stat.audioLevel)) {
+    audioAcc.audioLevel = stat.audioLevel;
+  }
+
+  const jbMs = updateJitterBufferDeltaMs(peerIdSafe, stat, tracker.jitterBuffer);
+  if (jbMs !== null) {
+    audioAcc.jitterBufferMsTotal += jbMs;
+    audioAcc.jitterBufferSamples += 1;
+    acc.audioJitterBufferMsTotal += jbMs;
     acc.audioJitterBufferSamples += 1;
   }
 
-  accumulateInboundMediaLoss(stat, 'in-audio', ctx, peerAcc.audioLossSamples);
+  accumulateInboundMediaLoss(stat, 'in-audio', ctx, audioAcc.lossSamples);
 };
 
 const resolveRemoteInboundLoss = (stat: Record<string, unknown>, ctx: StatContext): number | null => {
@@ -294,9 +460,6 @@ const resolveRemoteInboundLoss = (stat: Record<string, unknown>, ctx: StatContex
 
 const accumulateRemoteInboundStat = (stat: Record<string, unknown>, ctx: StatContext): void => {
   if (stat.kind !== 'video' && stat.kind !== 'audio') return;
-  if (stat.kind === 'audio') {
-    ctx.acc.audioPacketsLost += Math.max(0, Number(stat.packetsLost ?? 0));
-  }
 
   const rttSec = Number(stat.roundTripTime ?? 0);
   if (Number.isFinite(rttSec) && rttSec > 0) {
@@ -305,12 +468,22 @@ const accumulateRemoteInboundStat = (stat: Record<string, unknown>, ctx: StatCon
 
   recordJitterSample(stat, true, ctx.peerAcc);
   const lossPct = resolveRemoteInboundLoss(stat, ctx);
-  if (lossPct === null) return;
 
   if (stat.kind === 'video') {
-    ctx.peerAcc.videoLossSamples.push(lossPct);
-  } else {
-    ctx.peerAcc.audioLossSamples.push(lossPct);
+    if (lossPct !== null) ctx.peerAcc.videoLossSamples.push(lossPct);
+    return;
+  }
+
+  if (ctx.localAudioMeta.liveTrackCount === 0) return;
+
+  const lost = Math.max(0, Number(stat.packetsLost ?? 0));
+  ctx.peerAcc.outboundAudio.packetsLost += lost;
+  if (typeof stat.jitter === 'number' && Number.isFinite(stat.jitter) && stat.jitter >= 0) {
+    ctx.peerAcc.outboundAudio.jitterMsTotal += stat.jitter * 1000;
+    ctx.peerAcc.outboundAudio.jitterSamples += 1;
+  }
+  if (lossPct !== null) {
+    ctx.peerAcc.outboundAudio.lossSamples.push(lossPct);
   }
 };
 
@@ -325,8 +498,13 @@ const accumulateStatReport = (stat: Record<string, unknown>, ctx: StatContext): 
     accumulateAudioStat(stat, 'in', ctx);
   } else if (stat.type === 'remote-inbound-rtp') {
     accumulateRemoteInboundStat(stat, ctx);
-  } else if (stat.type === 'transport' && typeof stat.selectedCandidatePairId === 'string') {
-    ctx.peerAcc.selectedPairId = stat.selectedCandidatePairId;
+  } else if (stat.type === 'transport') {
+    if (typeof stat.selectedCandidatePairId === 'string') {
+      ctx.peerAcc.selectedPairId = stat.selectedCandidatePairId;
+    }
+    if (typeof stat.dtlsState === 'string' && !ctx.peerAcc.dtlsState) {
+      ctx.peerAcc.dtlsState = stat.dtlsState;
+    }
   } else if (stat.type === 'candidate-pair' && stat.state === 'succeeded') {
     const rttSec = Number(stat.currentRoundTripTime ?? 0);
     if (Number.isFinite(rttSec) && rttSec > 0) {
@@ -346,15 +524,44 @@ const resolvePeerRttMs = (peerAcc: PeerStatsAccumulator): number => {
   }
   const nominated = peerAcc.candidatePairs.find((pair) => pair.nominated);
   if (nominated) return nominated.rttMs;
-  if (peerAcc.candidatePairs.length > 0) return average(peerAcc.candidatePairs.map((p) => p.rttMs));
-  if (peerAcc.remoteInboundRttMs.length > 0) return average(peerAcc.remoteInboundRttMs);
+  if (peerAcc.candidatePairs.length > 0) return averageStat(peerAcc.candidatePairs.map((p) => p.rttMs));
+  if (peerAcc.remoteInboundRttMs.length > 0) return averageStat(peerAcc.remoteInboundRttMs);
   return 0;
+};
+
+const recordLocalAudioPeerContribution = (
+  outboundAudio: AudioTelemetryDto,
+  peerAcc: PeerStatsAccumulator,
+  acc: GlobalAccumulator
+): void => {
+  if (peerAcc.outboundAudio.hasActiveRtp) {
+    acc.outboundAudioHasRtp = true;
+    acc.outboundAudioBitrates.push(outboundAudio.bitrateKbps);
+    if (!acc.outboundAudioCodec && outboundAudio.codec) acc.outboundAudioCodec = outboundAudio.codec;
+    if (acc.outboundAudioSampleRateHz === 0 && outboundAudio.sampleRateHz > 0) {
+      acc.outboundAudioSampleRateHz = outboundAudio.sampleRateHz;
+    }
+    if (acc.outboundAudioChannels === 0 && outboundAudio.channels > 0) {
+      acc.outboundAudioChannels = outboundAudio.channels;
+    }
+    if (outboundAudio.audioLevel !== null) {
+      acc.outboundAudioLevel = outboundAudio.audioLevel;
+    }
+  }
+  acc.outboundAudioPacketsLost += outboundAudio.packetsLost;
+  acc.outboundAudioLossSamples.push(...peerAcc.outboundAudio.lossSamples);
+  if (peerAcc.outboundAudio.jitterSamples > 0) {
+    acc.outboundAudioJitterSamples.push(
+      peerAcc.outboundAudio.jitterMsTotal / peerAcc.outboundAudio.jitterSamples
+    );
+  }
 };
 
 const finalizePeerTelemetry = (
   entry: PeerEntry,
   peerAcc: PeerStatsAccumulator,
-  acc: StatsAccumulator
+  acc: GlobalAccumulator,
+  localAudioMeta: AudioTrackMeta
 ): PeerTelemetryDto => {
   const rawRttMs = resolvePeerRttMs(peerAcc);
   if (rawRttMs > 0) {
@@ -362,43 +569,87 @@ const finalizePeerTelemetry = (
     acc.rttSamples += 1;
   }
 
+  const remoteAudioMeta = readAudioTrackMetadata(entry.remoteStream, entry.pc);
+  const remoteVideoMeta = readVideoTrackMetadata(entry.remoteStream);
+  const inboundAudio = finalizeAudioTelemetry(peerAcc.inboundAudio, remoteAudioMeta);
+  const outboundAudio = finalizeAudioTelemetry(peerAcc.outboundAudio, localAudioMeta);
+  recordLocalAudioPeerContribution(outboundAudio, peerAcc, acc);
+
   const lossSource =
-    peerAcc.videoLossSamples.length > 0 ? peerAcc.videoLossSamples : peerAcc.audioLossSamples;
-  const packetLossPercent = roundTo(average(lossSource), 2);
+    peerAcc.videoLossSamples.length > 0
+      ? peerAcc.videoLossSamples
+      : peerAcc.inboundAudio.lossSamples;
+  const packetLossPercent = roundStat(averageStat(lossSource), 2);
   if (lossSource.length > 0) {
     acc.packetLossPercentTotal += packetLossPercent;
     acc.packetLossSamples += 1;
   }
 
-  const jitterMs = roundTo(average(peerAcc.jitterMsSamples), 1);
+  const jitterMs = roundStat(averageStat(peerAcc.jitterMsSamples), 1);
   if (peerAcc.jitterMsSamples.length > 0) {
     acc.jitterMsTotal += jitterMs;
     acc.jitterSamples += 1;
   }
 
+  const inboundWidth = peerAcc.inboundWidth > 0 ? peerAcc.inboundWidth : remoteVideoMeta.width;
+  const inboundHeight = peerAcc.inboundHeight > 0 ? peerAcc.inboundHeight : remoteVideoMeta.height;
+  const inboundFps = Math.round(
+    peerAcc.inboundFps > 0 ? peerAcc.inboundFps : remoteVideoMeta.frameRate
+  );
+
   return {
     peerIdSafe: entry.peerIdSafe,
     rttMs: Math.round(rawRttMs),
-    bitrateKbps: peerAcc.outboundBitrateKbps + peerAcc.inboundBitrateKbps,
-    fps: Math.round(peerAcc.inboundFps > 0 ? peerAcc.inboundFps : peerAcc.outboundFps),
+    inboundBitrateKbps: peerAcc.inboundBitrateKbps,
+    inboundFps,
+    inboundWidth,
+    inboundHeight,
+    inboundDroppedFrames: peerAcc.inboundDroppedFrames,
+    inboundCodec: peerAcc.inboundCodec,
+    decoderImplementation: peerAcc.decoderImplementation,
+    isDecoderHardwareAccelerated: peerAcc.isDecoderHardwareAccelerated,
+    inboundAudio,
+    outboundBitrateKbps: peerAcc.outboundBitrateKbps,
+    outboundFps: Math.round(peerAcc.outboundFps),
+    outboundWidth: peerAcc.outboundWidth,
+    outboundHeight: peerAcc.outboundHeight,
+    outboundCodec: peerAcc.outboundCodec,
+    encoderImplementation: peerAcc.encoderImplementation,
+    isEncoderHardwareAccelerated: peerAcc.isEncoderHardwareAccelerated,
+    outboundQualityLimitationReason: peerAcc.outboundQualityLimitationReason,
+    outboundAudio,
+    bitrateKbps: peerAcc.inboundBitrateKbps,
+    fps: inboundFps,
     packetLossPercent,
     jitterMs,
     connectionState: entry.pc.connectionState ?? 'unknown',
     dataChannelState: entry.dataChannel?.readyState ?? 'closed',
+    dtlsState: peerAcc.dtlsState,
   };
 };
 
 const collectPeerStats = async (
   entry: PeerEntry,
   tracker: StatsSampleTracker,
-  acc: StatsAccumulator
+  acc: GlobalAccumulator,
+  localAudioMeta: AudioTrackMeta
 ): Promise<void> => {
   if (entry.pc.connectionState === 'closed') return;
   const peerAcc = createPeerAccumulator();
+  const receivingAudioState = getReceivingAudioTrackState(entry.pc);
 
   try {
     const report = await entry.pc.getStats();
-    const ctx: StatContext = { peerIdSafe: entry.peerIdSafe, report, tracker, acc, peerAcc };
+    const ctx: StatContext = {
+      peerIdSafe: entry.peerIdSafe,
+      entry,
+      report,
+      tracker,
+      acc,
+      peerAcc,
+      localAudioMeta,
+      receivingAudioState,
+    };
     report.forEach((statEntry) => {
       accumulateStatReport(statEntry as unknown as Record<string, unknown>, ctx);
     });
@@ -406,21 +657,63 @@ const collectPeerStats = async (
     // Peer may close concurrently while stats are polled.
   }
 
-  acc.peerStats[entry.peerIdSafe] = finalizePeerTelemetry(entry, peerAcc, acc);
+  acc.peerStats[entry.peerIdSafe] = finalizePeerTelemetry(entry, peerAcc, acc, localAudioMeta);
+};
+
+const buildLocalAudioTelemetry = (
+  localAudioMeta: AudioTrackMeta,
+  acc: GlobalAccumulator
+): AudioTelemetryDto => {
+  const hasAudio = localAudioMeta.liveTrackCount > 0 || acc.outboundAudioHasRtp;
+  if (!hasAudio) {
+    return { ...EMPTY_AUDIO_TELEMETRY };
+  }
+
+  return {
+    hasAudio: true,
+    trackCount:
+      localAudioMeta.liveTrackCount > 0
+        ? localAudioMeta.liveTrackCount
+        : acc.outboundAudioHasRtp
+          ? 1
+          : 0,
+    codec: acc.outboundAudioCodec || acc.audioCodec,
+    sampleRateHz:
+      localAudioMeta.sampleRateHz > 0 ? localAudioMeta.sampleRateHz : acc.outboundAudioSampleRateHz,
+    channels: localAudioMeta.channels > 0 ? localAudioMeta.channels : acc.outboundAudioChannels,
+    bitrateKbps: Math.round(averageStat(acc.outboundAudioBitrates)),
+    jitterBufferMs: 0,
+    jitterMs:
+      acc.outboundAudioJitterSamples.length > 0
+        ? roundStat(averageStat(acc.outboundAudioJitterSamples), 1)
+        : 0,
+    packetsLost: Math.max(0, acc.outboundAudioPacketsLost),
+    packetLossPercent:
+      acc.outboundAudioLossSamples.length > 0
+        ? roundStat(averageStat(acc.outboundAudioLossSamples), 2)
+        : 0,
+    audioLevel: acc.outboundAudioLevel,
+  };
 };
 
 /**
- * Aggregates outbound/inbound video FPS, dropped frames, RTT, active codecs,
- * hardware acceleration telemetry, bitrates, packet loss, jitter, audio health,
- * and per-peer telemetry across all active WebRTC peers.
+ * Aggregates outbound/inbound video FPS, resolutions, dropped frames, RTT,
+ * active codecs/accelerators, bitrates, packet loss, jitter, local/remote audio
+ * telemetry, and per-peer telemetry across all active WebRTC peers.
  */
 export const collectWebRtcStats = async (
   peers: Iterable<PeerEntry>,
-  tracker: StatsSampleTracker = createStatsSampleTracker()
+  tracker: StatsSampleTracker = createStatsSampleTracker(),
+  localStream: MediaStream | null = null
 ): Promise<WebRtcStatsSnapshot> => {
-  const acc: StatsAccumulator = {
+  const localVideoMeta = readVideoTrackMetadata(localStream);
+  const localAudioMeta = readAudioTrackMetadata(localStream);
+
+  const acc: GlobalAccumulator = {
     outboundFps: 0,
     inboundFps: 0,
+    outboundWidth: 0,
+    outboundHeight: 0,
     droppedFrames: 0,
     rttMs: 0,
     rttSamples: 0,
@@ -435,7 +728,16 @@ export const collectWebRtcStats = async (
     jitterMsTotal: 0,
     jitterSamples: 0,
     audioCodec: '',
-    audioBitrateKbps: 0,
+    inboundAudioBitrateTotal: 0,
+    outboundAudioBitrates: [],
+    outboundAudioCodec: '',
+    outboundAudioSampleRateHz: 0,
+    outboundAudioChannels: 0,
+    outboundAudioHasRtp: false,
+    outboundAudioPacketsLost: 0,
+    outboundAudioLossSamples: [],
+    outboundAudioJitterSamples: [],
+    outboundAudioLevel: null,
     audioJitterBufferMsTotal: 0,
     audioJitterBufferSamples: 0,
     audioPacketsLost: 0,
@@ -443,12 +745,17 @@ export const collectWebRtcStats = async (
   };
 
   for (const entry of peers) {
-    await collectPeerStats(entry, tracker, acc);
+    await collectPeerStats(entry, tracker, acc, localAudioMeta);
   }
+
+  const localAudio = buildLocalAudioTelemetry(localAudioMeta, acc);
 
   return {
     outboundFps: acc.outboundFps,
     inboundFps: acc.inboundFps,
+    localWidth: acc.outboundWidth > 0 ? acc.outboundWidth : localVideoMeta.width,
+    localHeight: acc.outboundHeight > 0 ? acc.outboundHeight : localVideoMeta.height,
+    localCaptureFps: localVideoMeta.frameRate,
     droppedFrames: acc.droppedFrames,
     rttMs: acc.rttSamples > 0 ? acc.rttMs / acc.rttSamples : 0,
     activeCodec: acc.activeCodec,
@@ -458,15 +765,17 @@ export const collectWebRtcStats = async (
     outboundBitrateKbps: acc.outboundBitrateKbps,
     inboundBitrateKbps: acc.inboundBitrateKbps,
     packetLossPercent:
-      acc.packetLossSamples > 0 ? roundTo(acc.packetLossPercentTotal / acc.packetLossSamples, 2) : 0,
-    jitterMs: acc.jitterSamples > 0 ? roundTo(acc.jitterMsTotal / acc.jitterSamples, 1) : 0,
-    audioCodec: acc.audioCodec,
-    audioBitrateKbps: acc.audioBitrateKbps,
+      acc.packetLossSamples > 0 ? roundStat(acc.packetLossPercentTotal / acc.packetLossSamples, 2) : 0,
+    jitterMs: acc.jitterSamples > 0 ? roundStat(acc.jitterMsTotal / acc.jitterSamples, 1) : 0,
+    audioCodec: acc.audioCodec || localAudio.codec,
+    audioBitrateKbps:
+      acc.inboundAudioBitrateTotal > 0 ? acc.inboundAudioBitrateTotal : localAudio.bitrateKbps,
     audioJitterBufferMs:
       acc.audioJitterBufferSamples > 0
-        ? roundTo(acc.audioJitterBufferMsTotal / acc.audioJitterBufferSamples, 1)
+        ? roundStat(acc.audioJitterBufferMsTotal / acc.audioJitterBufferSamples, 1)
         : 0,
     audioPacketsLost: acc.audioPacketsLost,
+    localAudio,
     peerStats: acc.peerStats,
   };
 };

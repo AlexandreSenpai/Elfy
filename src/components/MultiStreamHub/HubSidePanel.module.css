@@ -77,34 +77,6 @@
   text-transform: uppercase;
 }
 
-.headerActions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.hideBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--outline-variant);
-  background-color: var(--surface-container);
-  color: var(--on-surface-variant);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.16s ease;
-}
-
-.hideBtn:hover {
-  color: var(--on-surface);
-  background-color: var(--surface-container-high);
-  border-color: rgba(255, 255, 255, 0.16);
-}
-
 .closeBtn {
   width: 26px;
   height: 26px;
@@ -127,46 +99,73 @@
   border-color: rgba(255, 77, 109, 0.5);
 }
 
-.tabBar {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
+.telemetryTopBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--outline-variant);
   background-color: rgba(11, 15, 20, 0.55);
   flex-shrink: 0;
 }
 
-.tabBtn {
+.backBtn {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 7px 8px;
+  gap: 5px;
+  padding: 5px 9px;
   border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  background-color: transparent;
-  color: var(--on-surface-variant);
-  font-size: 12px;
+  border: 1px solid var(--outline-variant);
+  background-color: var(--surface-container);
+  color: var(--on-surface);
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
+  flex-shrink: 0;
   transition: all 0.16s ease;
 }
 
-.tabBtn:hover {
-  color: var(--on-surface);
-  background-color: rgba(255, 255, 255, 0.04);
+.backBtn:hover {
+  border-color: rgba(255, 77, 109, 0.45);
+  background-color: var(--surface-container-high);
 }
 
-.tabBtnActive {
-  color: var(--on-surface);
+.streamerSwitchRow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.streamerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--outline-variant);
   background-color: var(--surface-container);
-  border-color: rgba(255, 77, 109, 0.42);
-  box-shadow: inset 0 0 0 1px rgba(255, 77, 109, 0.12);
+  color: var(--on-surface-variant);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.16s ease;
+}
+
+.streamerChip:hover {
+  color: var(--on-surface);
+  border-color: rgba(123, 208, 255, 0.45);
+}
+
+.streamerChipActive {
+  color: #ffffff;
+  background-color: rgba(123, 208, 255, 0.18);
+  border-color: var(--secondary);
 }
 
 .tabBody {

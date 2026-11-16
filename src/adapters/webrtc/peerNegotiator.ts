@@ -272,6 +272,30 @@ export class PeerNegotiator {
       entry.remoteStream = unmutedStream;
       this.deps.getCallbacks().onRemoteStream?.(entry.peerIdSafe, unmutedStream);
     };
+
+    if (event.track.kind === 'audio') {
+      event.track.onmute = () => {
+        if (this.deps.getPeers().get(entry.peerIdSafe) !== entry) return;
+        if (entry.pc.connectionState === 'closed') return;
+        this.pruneInactiveRemoteTracks(entry);
+      };
+    }
+  }
+
+  private pruneInactiveRemoteTracks(entry: PeerEntry): void {
+    const prevIds = entry.remoteStream?.getTracks().map((t) => t.id) ?? [];
+    const nextStream = buildFreshRemoteStream(entry);
+    const nextIds = nextStream?.getTracks().map((t) => t.id) ?? [];
+    if (
+      prevIds.length === nextIds.length &&
+      prevIds.every((id, index) => id === nextIds[index])
+    ) {
+      return;
+    }
+    entry.remoteStream = nextStream;
+    if (nextStream) {
+      this.deps.getCallbacks().onRemoteStream?.(entry.peerIdSafe, nextStream);
+    }
   }
 
   private handleConnectionStateChange(entry: PeerEntry): void {
@@ -465,6 +489,7 @@ export class PeerNegotiator {
         await applyPreferredVideoCodecs(entry.pc);
         const answer = await entry.pc.createAnswer();
         await entry.pc.setLocalDescription(answer);
+        this.pruneInactiveRemoteTracks(entry);
         await this.deps.captureManager.applyEncodingToPeerSenders(
           entry,
           this.deps.getPeers().size

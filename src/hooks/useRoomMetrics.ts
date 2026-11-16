@@ -17,7 +17,7 @@ import {
 } from './room/roomHelpers';
 
 const MAX_TELEMETRY_HISTORY_SAMPLES = 450;
-const MAX_PEER_TELEMETRY_SAMPLES = 30;
+const MAX_PEER_TELEMETRY_SAMPLES = 450;
 
 export interface UseRoomMetricsOptions {
   normalizedHub: string;
@@ -64,8 +64,7 @@ const buildTelemetryPoint = (
   timestamp: number
 ): TelemetryHistoryPointDto => ({
   timestamp,
-  bitrateKbps:
-    metrics.outboundBitrateKbps > 0 ? metrics.outboundBitrateKbps : metrics.inboundBitrateKbps,
+  bitrateKbps: metrics.outboundBitrateKbps,
   outboundFps: metrics.outboundFps,
   inboundFps: metrics.inboundFps,
   rttMs: metrics.rttMs,
@@ -75,7 +74,7 @@ const buildTelemetryPoint = (
   memoryUsedMb: metrics.memoryUsedMb,
   droppedFrames: metrics.droppedFrames,
   audioJitterBufferMs: metrics.audioJitterBufferMs,
-  audioBitrateKbps: metrics.audioBitrateKbps,
+  audioBitrateKbps: metrics.localAudio.bitrateKbps,
 });
 
 export interface UseRoomMetricsResult {
@@ -155,9 +154,15 @@ export const useRoomMetrics = ({
         const point: PeerTelemetryHistoryPointDto = {
           timestamp: now,
           rttMs: stats.rttMs,
-          bitrateKbps: stats.bitrateKbps,
-          fps: stats.fps,
+          bitrateKbps: stats.inboundBitrateKbps,
+          inboundBitrateKbps: stats.inboundBitrateKbps,
+          outboundBitrateKbps: stats.outboundBitrateKbps,
+          fps: stats.inboundFps,
+          inboundFps: stats.inboundFps,
+          outboundFps: stats.outboundFps,
           packetLossPercent: stats.packetLossPercent,
+          jitterMs: stats.jitterMs,
+          droppedFrames: stats.inboundDroppedFrames,
         };
         next[peerIdSafe] = appendBoundedSample(
           prev[peerIdSafe] ?? [],

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import styles from './HubSidePanel.module.css';
 import {
   PeerTelemetryHistoryPointDto,
@@ -10,19 +10,17 @@ import {
   SystemMetricsDto,
   TelemetryHistoryPointDto,
 } from '../../domain/dtos';
-import { ParticipantsPanel } from './ParticipantsPanel';
+import { ParticipantsPanel, isPeerActivelyStreaming } from './ParticipantsPanel';
 import { TelemetryPanel } from './TelemetryPanel';
-
-export type HubSidePanelTab = 'participants' | 'telemetry';
 
 export interface HubSidePanelProps {
   isOpen: boolean;
-  activeTab: HubSidePanelTab;
-  onChangeTab: (tab: HubSidePanelTab) => void;
+  inspectedPeerIdSafe: string | null;
+  onSelectTelemetryPeer: (peerIdSafe: string | null) => void;
   onClose: () => void;
-  hubId: string;
   localPeerIdSafe: string;
   localRole: RoomRole;
+  isSharing: boolean;
   peers: RoomPeerDto[];
   streams: StreamItem[];
   streamVolumes: Record<string, number>;
@@ -38,16 +36,18 @@ export interface HubSidePanelProps {
 }
 
 /**
- * Right-hand room drawer hosting Participants controls and live Telemetry & Stats charts.
+ * Right-hand room drawer showing the connected users list and, when triggered
+ * from a streaming participant's telemetry icon, that specific user's real-time
+ * stream telemetry.
  */
 export const HubSidePanel: React.FC<HubSidePanelProps> = ({
   isOpen,
-  activeTab,
-  onChangeTab,
+  inspectedPeerIdSafe,
+  onSelectTelemetryPeer,
   onClose,
-  hubId,
   localPeerIdSafe,
   localRole,
+  isSharing,
   peers,
   streams,
   streamVolumes,
@@ -61,7 +61,25 @@ export const HubSidePanel: React.FC<HubSidePanelProps> = ({
   onSetStreamVolume,
   onKickPeer,
 }) => {
+  const activeStreamingPeers = peers.filter((peer) =>
+    isPeerActivelyStreaming(peer, localPeerIdSafe, isSharing, streams)
+  );
+  const inspectedPeer = inspectedPeerIdSafe
+    ? activeStreamingPeers.find((peer) => peer.peerIdSafe === inspectedPeerIdSafe) ?? null
+    : null;
+
+  useEffect(() => {
+    if (inspectedPeerIdSafe && !inspectedPeer) {
+      onSelectTelemetryPeer(null);
+    }
+  }, [inspectedPeer, inspectedPeerIdSafe, onSelectTelemetryPeer]);
+
   if (!isOpen) return null;
+
+  const isViewingTelemetry = inspectedPeer !== null;
+  const inspectedStream = inspectedPeer
+    ? streams.find((stream) => stream.peerIdSafe === inspectedPeer.peerIdSafe)
+    : undefined;
 
   return (
     <aside
@@ -72,75 +90,77 @@ export const HubSidePanel: React.FC<HubSidePanelProps> = ({
       <div className={styles.panelHeader}>
         <div className={styles.panelTitleWrap}>
           <span className={styles.pulseDot} />
-          <span className={styles.panelTitle}>HUB PANEL</span>
+          <span className={styles.panelTitle}>
+            {isViewingTelemetry ? 'STREAM TELEMETRY' : `PARTICIPANTS (${peers.length})`}
+          </span>
         </div>
 
-        <div className={styles.headerActions}>
+        <button
+          type="button"
+          className={styles.closeBtn}
+          data-testid="close-hub-panel-btn"
+          aria-label="Close Hub Panel"
+          title="Close Hub Panel"
+          onClick={onClose}
+        >
+          ×
+        </button>
+      </div>
+
+      {isViewingTelemetry && (
+        <div className={styles.telemetryTopBar}>
           <button
             type="button"
-            className={styles.hideBtn}
-            onClick={onClose}
-            title="Hide panel"
+            className={styles.backBtn}
+            data-testid="telemetry-back-btn"
+            onClick={() => onSelectTelemetryPeer(null)}
+            title="Back to Participants"
           >
-            <span>Hide</span>
-            <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>
-              chevron_right
+            <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+              arrow_back
             </span>
+            <span>Users ({peers.length})</span>
           </button>
 
-          <button
-            type="button"
-            className={styles.closeBtn}
-            data-testid="close-hub-panel-btn"
-            aria-label="Close Hub Panel"
-            title="Close Hub Panel"
-            onClick={onClose}
-          >
-            ×
-          </button>
+          {activeStreamingPeers.length > 1 && (
+            <div className={styles.streamerSwitchRow} role="group" aria-label="Switch active streamer">
+              {activeStreamingPeers.map((streamer) => (
+                <button
+                  key={streamer.peerIdSafe}
+                  type="button"
+                  data-testid={`telemetry-switch-${streamer.peerIdSafe}`}
+                  aria-pressed={streamer.peerIdSafe === inspectedPeer.peerIdSafe}
+                  className={`${styles.streamerChip} ${
+                    streamer.peerIdSafe === inspectedPeer.peerIdSafe ? styles.streamerChipActive : ''
+                  }`}
+                  onClick={() => onSelectTelemetryPeer(streamer.peerIdSafe)}
+                >
+                  {streamer.displayName}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      </div>
-
-      <div className={styles.tabBar} role="tablist" aria-label="Hub panel sections">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'participants'}
-          data-testid="hub-tab-participants"
-          className={`${styles.tabBtn} ${
-            activeTab === 'participants' ? styles.tabBtnActive : ''
-          }`}
-          onClick={() => onChangeTab('participants')}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
-            group
-          </span>
-          <span>Participants ({peers.length})</span>
-        </button>
-
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === 'telemetry'}
-          data-testid="hub-tab-telemetry"
-          className={`${styles.tabBtn} ${
-            activeTab === 'telemetry' ? styles.tabBtnActive : ''
-          }`}
-          onClick={() => onChangeTab('telemetry')}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
-            monitoring
-          </span>
-          <span>Telemetry &amp; Stats</span>
-        </button>
-      </div>
+      )}
 
       <div className={styles.tabBody}>
-        {activeTab === 'participants' ? (
+        {isViewingTelemetry ? (
+          <TelemetryPanel
+            peer={inspectedPeer}
+            isLocal={inspectedPeer.peerIdSafe === localPeerIdSafe}
+            peerStream={inspectedStream}
+            localFpsSetting={fps}
+            localResolutionSetting={resolution}
+            isConnected={isConnected}
+            systemMetrics={systemMetrics}
+            localHistory={telemetryHistory}
+            peerHistory={peerTelemetryHistory[inspectedPeer.peerIdSafe] ?? []}
+          />
+        ) : (
           <ParticipantsPanel
-            hubId={hubId}
             localPeerIdSafe={localPeerIdSafe}
             localRole={localRole}
+            isSharing={isSharing}
             peers={peers}
             streams={streams}
             streamVolumes={streamVolumes}
@@ -148,17 +168,11 @@ export const HubSidePanel: React.FC<HubSidePanelProps> = ({
             fps={fps}
             resolution={resolution}
             systemMetrics={systemMetrics}
+            telemetryHistory={telemetryHistory}
             peerTelemetryHistory={peerTelemetryHistory}
             onSetStreamVolume={onSetStreamVolume}
             onKickPeer={onKickPeer}
-          />
-        ) : (
-          <TelemetryPanel
-            fps={fps}
-            isConnected={isConnected}
-            systemMetrics={systemMetrics}
-            telemetryHistory={telemetryHistory}
-            hasActiveAudioStreams={streams.length > 0}
+            onInspectPeerTelemetry={(peerIdSafe) => onSelectTelemetryPeer(peerIdSafe)}
           />
         )}
       </div>

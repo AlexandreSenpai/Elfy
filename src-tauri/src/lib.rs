@@ -18,8 +18,23 @@ fn navigate_window_hash(window: &tauri::WebviewWindow, hash_path: &str) -> Resul
     window.navigate(current_url).map_err(|e| e.to_string())
 }
 
+static REGISTER_WINDOW_LOCK: std::sync::OnceLock<tauri::async_runtime::Mutex<()>> =
+    std::sync::OnceLock::new();
+static REGISTER_OPEN_GUARD_UNTIL_MS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+fn register_window_mutex() -> &'static tauri::async_runtime::Mutex<()> {
+    REGISTER_WINDOW_LOCK.get_or_init(|| tauri::async_runtime::Mutex::new(()))
+}
+
 #[tauri::command]
-fn show_register_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn show_register_window(app: tauri::AppHandle) -> Result<(), String> {
+    let _guard = register_window_mutex().lock().await;
+    REGISTER_OPEN_GUARD_UNTIL_MS.store(
+        now_epoch_ms().saturating_add(1200),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+
     if let Some(window) = app.get_webview_window("register") {
         let _ = window.unminimize();
         let _ = window.center();
@@ -28,6 +43,8 @@ fn show_register_window(app: tauri::AppHandle) -> Result<(), String> {
         return navigate_window_hash(&window, "/register");
     }
 
+    // Must run in an async command on Windows: synchronous WebviewWindowBuilder::build()
+    // deadlocks WebView2 COM creation against the Win32 main thread message pump.
     tauri::WebviewWindowBuilder::new(
         &app,
         "register",
@@ -39,7 +56,15 @@ fn show_register_window(app: tauri::AppHandle) -> Result<(), String> {
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
+    .visible(false)
     .center()
+    .on_page_load(|window, payload| {
+        if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+            let _ = window.center();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    })
     .build()
     .map_err(|e| e.to_string())?;
 
@@ -55,7 +80,7 @@ fn toggle_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
 }
 
 #[tauri::command]
-fn close_register_window(app: tauri::AppHandle) -> Result<(), String> {
+async fn close_register_window(app: tauri::AppHandle) -> Result<(), String> {
     let Some(window) = app.get_webview_window("register") else {
         return Ok(());
     };
@@ -227,6 +252,16 @@ fn is_fullscreen(window: tauri::WebviewWindow) -> Result<bool, String> {
     window.is_fullscreen().map_err(|e| e.to_string())
 }
 
+fn is_sibling_window_active(app: &tauri::AppHandle) -> bool {
+    if now_epoch_ms() < REGISTER_OPEN_GUARD_UNTIL_MS.load(std::sync::atomic::Ordering::SeqCst) {
+        return true;
+    }
+    ["register", "stream"].iter().any(|label| {
+        app.get_webview_window(label)
+            .is_some_and(|win| win.is_visible().unwrap_or(false) && win.is_focused().unwrap_or(false))
+    })
+}
+
 fn configure_main_window(app: &tauri::App) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -240,6 +275,9 @@ fn configure_main_window(app: &tauri::App) -> Result<(), String> {
             );
         }
         WindowEvent::Focused(false) => {
+            if is_sibling_window_active(w.app_handle()) {
+                return;
+            }
             let dragging = MAIN_WINDOW_DRAGGING.load(std::sync::atomic::Ordering::SeqCst);
             let guarded =
                 now_epoch_ms() < MAIN_DRAG_GUARD_UNTIL_MS.load(std::sync::atomic::Ordering::SeqCst);

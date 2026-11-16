@@ -1,4 +1,5 @@
 import {
+  AudioTelemetryDto,
   ConnectionFailureDto,
   DataChannelEnvelopeDto,
   DataChannelPayload,
@@ -86,6 +87,9 @@ export interface StreamEngineCallbacks {
 export interface WebRtcStatsSnapshot {
   outboundFps: number;
   inboundFps: number;
+  localWidth: number;
+  localHeight: number;
+  localCaptureFps: number;
   droppedFrames: number;
   rttMs: number;
   activeCodec: string;
@@ -100,6 +104,7 @@ export interface WebRtcStatsSnapshot {
   audioBitrateKbps: number;
   audioJitterBufferMs: number;
   audioPacketsLost: number;
+  localAudio: AudioTelemetryDto;
   peerStats: Record<string, PeerTelemetryDto>;
 }
 

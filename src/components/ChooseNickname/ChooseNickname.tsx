@@ -9,7 +9,7 @@ import {
   ELFY_HAPPY,
   ELFY_MASCOT_ICON,
 } from '../../data/mockData';
-import { closeRegisterWindowTauri, isTauri, startDraggingTauri } from '../../utils/tauri';
+import { beginWindowDragOnMove, closeRegisterWindowTauri, isTauri } from '../../utils/tauri';
 
 interface ChooseNicknameProps {
   initialProfile: UserProfile;
@@ -171,7 +171,7 @@ export const ChooseNickname: React.FC<ChooseNicknameProps> = ({
     if (target?.closest('button, input, select, textarea, a, [role="button"], [role="switch"], [data-no-drag]')) {
       return;
     }
-    startDraggingTauri();
+    beginWindowDragOnMove(e.clientX, e.clientY);
   };
 
   const submitState = getSubmitLabel(isSubmitting, isSuccess, isExistingUser);

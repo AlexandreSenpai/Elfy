@@ -4,6 +4,7 @@ import {
   PeerTelemetryDto,
   StreamQualityLimitationReason,
 } from '../../domain/dtos';
+import { getReceivingAudioTrackState } from './mediaTrackStats';
 
 /** Per-peer runtime WebRTC state tracked by the streaming engine. */
 export interface PeerEntry {
@@ -39,9 +40,15 @@ export interface PacketLossSample {
   packetsTotal: number;
 }
 
+export interface JitterBufferSample {
+  delay: number;
+  emitted: number;
+}
+
 export interface StatsSampleTracker {
   bitrate: Map<string, BitrateSample>;
   packetLoss: Map<string, PacketLossSample>;
+  jitterBuffer: Map<string, JitterBufferSample>;
 }
 
 /** @deprecated Alias kept for internal stats callers. */
@@ -50,11 +57,13 @@ export type OutboundBitrateSample = BitrateSample;
 export const createStatsSampleTracker = (): StatsSampleTracker => ({
   bitrate: new Map<string, BitrateSample>(),
   packetLoss: new Map<string, PacketLossSample>(),
+  jitterBuffer: new Map<string, JitterBufferSample>(),
 });
 
 export const clearStatsSampleTracker = (tracker: StatsSampleTracker): void => {
   tracker.bitrate.clear();
   tracker.packetLoss.clear();
+  tracker.jitterBuffer.clear();
 };
 
 export const clearOutboundStatsSamples = (tracker: StatsSampleTracker): void => {
@@ -75,6 +84,11 @@ export const prunePeerStatsSamples = (tracker: StatsSampleTracker, peerIdSafe: s
   for (const key of Array.from(tracker.packetLoss.keys())) {
     if (key.startsWith(prefix)) {
       tracker.packetLoss.delete(key);
+    }
+  }
+  for (const key of Array.from(tracker.jitterBuffer.keys())) {
+    if (key.startsWith(prefix)) {
+      tracker.jitterBuffer.delete(key);
     }
   }
 };
@@ -208,23 +222,29 @@ export const buildConnectionFailure = (entry: PeerEntry): ConnectionFailureDto =
   };
 };
 
-/** Rebuilds a clean MediaStream replacing any stale or same-kind track on track/unmute events. */
+/** Rebuilds a clean MediaStream replacing any stale or inactive tracks on track/SDP events. */
 export const buildFreshRemoteStream = (
   entry: PeerEntry,
   incomingTrack?: MediaStreamTrack
 ): MediaStream | null => {
   const tracks: MediaStreamTrack[] = [];
   const existingTracks = entry.remoteStream?.getTracks() ?? [];
+  const { inactiveTrackIds } = getReceivingAudioTrackState(entry.pc);
 
   for (const track of existingTracks) {
     if (track.readyState === 'ended') continue;
+    if (track.kind === 'audio' && inactiveTrackIds.has(track.id)) continue;
     if (incomingTrack && (track.id === incomingTrack.id || track.kind === incomingTrack.kind)) {
       continue;
     }
     tracks.push(track);
   }
 
-  if (incomingTrack && incomingTrack.readyState !== 'ended') {
+  if (
+    incomingTrack &&
+    incomingTrack.readyState !== 'ended' &&
+    !(incomingTrack.kind === 'audio' && inactiveTrackIds.has(incomingTrack.id))
+  ) {
     tracks.push(incomingTrack);
   }
 

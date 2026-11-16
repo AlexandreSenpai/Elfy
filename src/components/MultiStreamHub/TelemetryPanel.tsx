@@ -1,20 +1,34 @@
 import React, { useMemo, useState } from 'react';
 import styles from './TelemetryPanel.module.css';
+import { ELFY_MASCOT_ICON } from '../../data/mockData';
+import { EMPTY_AUDIO_TELEMETRY } from '../../domain/config';
 import {
+  AudioTelemetryDto,
+  PeerTelemetryDto,
+  PeerTelemetryHistoryPointDto,
+  RoomPeerDto,
   StreamFpsOption,
+  StreamItem,
+  StreamQualityLimitationReason,
+  StreamResolutionPreset,
   SystemMetricsDto,
   TelemetryHistoryPointDto,
 } from '../../domain/dtos';
+import { formatResolutionLabel } from '../../hooks/room/roomHelpers';
 import { BitrateAreaChart, FpsLineChart, SparklineChart } from './TelemetryCharts';
 
 export type TelemetryWindowKey = '1m' | '5m' | '15m';
 
 export interface TelemetryPanelProps {
-  fps: StreamFpsOption;
+  peer: RoomPeerDto;
+  isLocal: boolean;
+  peerStream?: StreamItem;
+  localFpsSetting: StreamFpsOption;
+  localResolutionSetting: StreamResolutionPreset;
   isConnected: boolean;
   systemMetrics: SystemMetricsDto;
-  telemetryHistory: TelemetryHistoryPointDto[];
-  hasActiveAudioStreams?: boolean;
+  localHistory: TelemetryHistoryPointDto[];
+  peerHistory: PeerTelemetryHistoryPointDto[];
 }
 
 const WINDOW_CONFIG: Record<
@@ -28,10 +42,10 @@ const WINDOW_CONFIG: Record<
 
 const WINDOW_KEYS: TelemetryWindowKey[] = ['1m', '5m', '15m'];
 
-const sliceHistoryByWindow = (
-  history: TelemetryHistoryPointDto[],
+const sliceHistoryByWindow = <T extends { timestamp: number }>(
+  history: T[],
   windowKey: TelemetryWindowKey
-): TelemetryHistoryPointDto[] => {
+): T[] => {
   if (history.length === 0) return [];
   const latestTimestamp = history[history.length - 1].timestamp;
   const cutoff = latestTimestamp - WINDOW_CONFIG[windowKey].ms;
@@ -47,7 +61,7 @@ const formatRelativeTime = (timestamp: number, latestTimestamp: number): string 
   return remSec > 0 ? `-${mins}m ${remSec}s` : `-${mins}m`;
 };
 
-const computeFpsJitter = (fpsValues: number[]): number => {
+const computeFpsDeltaAvg = (fpsValues: number[]): number => {
   const nonZero = fpsValues.filter((val) => val > 0);
   if (nonZero.length < 2) return 0;
   let totalDelta = 0;
@@ -60,91 +74,186 @@ const computeFpsJitter = (fpsValues: number[]): number => {
 const getSmoothnessRating = (
   currentFps: number,
   targetFps: number,
-  jitterFps: number,
+  fpsDelta: number,
   droppedFrames: number
-): { label: 'High Smoothness' | 'Moderate' | 'Low'; className: string } => {
+): { label: 'High Smoothness' | 'Moderate' | 'Low' | 'Standby'; className: string } => {
   if (currentFps <= 0) {
-    if (droppedFrames > 5) {
-      return { label: 'Moderate', className: styles.statusWarn };
-    }
-    return { label: 'High Smoothness', className: styles.statusGood };
+    return { label: 'Standby', className: styles.statusStandby };
   }
 
   const ratio = targetFps > 0 ? currentFps / targetFps : 1;
-  if (ratio >= 0.85 && jitterFps <= 3) {
+  if (ratio >= 0.85 && fpsDelta <= 3 && droppedFrames < 15) {
     return { label: 'High Smoothness', className: styles.statusGood };
   }
-  if (ratio >= 0.55 && jitterFps <= 8) {
+  if (ratio >= 0.55 && fpsDelta <= 8) {
     return { label: 'Moderate', className: styles.statusWarn };
   }
   return { label: 'Low', className: styles.statusError };
 };
 
-const computeChannelHealthPercent = (
-  isConnected: boolean,
-  metrics: SystemMetricsDto
-): number => {
-  if (!isConnected) return 0;
-  const peerEntries = Object.values(metrics.peerStats ?? {});
-  if (peerEntries.length === 0) return 100;
-
-  let scoreSum = 0;
-  for (const peer of peerEntries) {
-    const dcOk = peer.dataChannelState === 'open' ? 1 : 0.4;
-    const pcOk =
-      peer.connectionState === 'connected'
-        ? 1
-        : peer.connectionState === 'connecting' || peer.connectionState === 'new'
-          ? 0.75
-          : 0.25;
-    scoreSum += ((dcOk + pcOk) / 2) * 100;
-  }
-  return Math.max(0, Math.min(100, Math.round(scoreSum / peerEntries.length)));
-};
-
-const formatEncoderLabel = (metrics: SystemMetricsDto): string => {
-  if (metrics.encoderImplementation) return metrics.encoderImplementation;
-  if (metrics.isHardwareAccelerated === true) return 'HW';
-  if (metrics.isHardwareAccelerated === false) return 'SW';
+const formatCodecAccelLabel = (accel: boolean | null, implementation: string): string => {
+  if (implementation) return implementation;
+  if (accel === true) return 'HW';
+  if (accel === false) return 'SW';
   return 'Auto';
 };
 
+const formatLimitationLabel = (reason: StreamQualityLimitationReason): string => {
+  if (reason === 'cpu') return 'CPU';
+  if (reason === 'bandwidth') return 'Bandwidth';
+  if (reason === 'other') return 'Other';
+  return 'None';
+};
+
+const formatChannelLabel = (channels: number): string => {
+  if (channels === 1) return ' Mono';
+  if (channels === 2) return ' Stereo';
+  if (channels > 2) return ` ${channels}ch`;
+  return '';
+};
+
+const formatSampleRateLabel = (sampleRateHz: number): string => {
+  if (sampleRateHz <= 0) return '';
+  const khz = Math.round((sampleRateHz / 1000) * 10) / 10;
+  return `${khz} kHz · `;
+};
+
+const resolveTransportStatus = (
+  isConnected: boolean,
+  isLocal: boolean,
+  systemMetrics: SystemMetricsDto,
+  peerStats: PeerTelemetryDto | undefined
+): { subtitle: string; badgeText: string; badgeClass: string } => {
+  if (!isConnected) {
+    return {
+      subtitle: 'Signaling disconnected · No DTLS transport',
+      badgeText: 'OFFLINE',
+      badgeClass: styles.statusError,
+    };
+  }
+
+  if (!isLocal) {
+    const pcState = peerStats?.connectionState ?? 'unknown';
+    const dcState = peerStats?.dataChannelState ?? 'closed';
+    const dtls = peerStats?.dtlsState || (pcState === 'connected' ? 'connected' : pcState);
+    const healthy = pcState === 'connected' && dcState === 'open';
+    const connecting = pcState === 'connecting' || pcState === 'new' || dcState === 'connecting';
+    return {
+      subtitle: `DTLS-SRTP (${dtls}) · PC ${pcState} · DC ${dcState}`,
+      badgeText: healthy ? '100% OK' : connecting ? 'CONNECTING' : 'DEGRADED',
+      badgeClass: healthy ? styles.statusGood : connecting ? styles.statusWarn : styles.statusError,
+    };
+  }
+
+  const peerEntries = Object.values(systemMetrics.peerStats ?? {});
+  if (peerEntries.length === 0) {
+    return {
+      subtitle: 'DTLS-SRTP ready · Waiting for remote peers',
+      badgeText: 'STANDBY',
+      badgeClass: styles.statusStandby,
+    };
+  }
+
+  const healthyCount = peerEntries.filter(
+    (entry) => entry.connectionState === 'connected' && entry.dataChannelState === 'open'
+  ).length;
+  const healthPct = Math.round((healthyCount / peerEntries.length) * 100);
+  return {
+    subtitle: `DTLS-SRTP · ${healthyCount}/${peerEntries.length} peers connected`,
+    badgeText: `${healthPct}% OK`,
+    badgeClass:
+      healthPct >= 80 ? styles.statusGood : healthPct > 0 ? styles.statusWarn : styles.statusError,
+  };
+};
+
+const resolveAudioCardView = (audio: AudioTelemetryDto, isLocal: boolean) => {
+  if (!audio.hasAudio) {
+    return {
+      isActive: false,
+      badgeText: 'NO AUDIO',
+      badgeClass: styles.statusStandby,
+      barPct: 0,
+    };
+  }
+
+  if (isLocal) {
+    const transmitting = audio.bitrateKbps > 0;
+    const levelPct =
+      audio.audioLevel !== null
+        ? Math.max(12, Math.min(100, Math.round(audio.audioLevel * 100)))
+        : transmitting
+          ? 100
+          : 30;
+    return {
+      isActive: true,
+      badgeText: transmitting ? 'TRANSMITTING' : 'CAPTURING',
+      badgeClass: styles.statusGood,
+      barPct: levelPct,
+    };
+  }
+
+  const synchronized = audio.bitrateKbps > 0 || audio.jitterBufferMs > 0;
+  const bufferHealthPct = synchronized
+    ? Math.max(15, Math.min(100, Math.round(100 - Math.min(80, audio.jitterBufferMs * 0.7))))
+    : 25;
+  return {
+    isActive: true,
+    badgeText: synchronized ? 'SYNCHRONIZED' : 'ACTIVE',
+    badgeClass: styles.statusGood,
+    barPct: bufferHealthPct,
+  };
+};
+
 export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
-  fps,
+  peer,
+  isLocal,
+  peerStream,
+  localFpsSetting,
+  localResolutionSetting,
   isConnected,
   systemMetrics,
-  telemetryHistory,
-  hasActiveAudioStreams = false,
+  localHistory,
+  peerHistory,
 }) => {
   const [selectedWindow, setSelectedWindow] = useState<TelemetryWindowKey>('1m');
 
-  const slicedHistory = useMemo(
-    () => sliceHistoryByWindow(telemetryHistory, selectedWindow),
-    [selectedWindow, telemetryHistory]
+  const peerStats = isLocal ? undefined : systemMetrics.peerStats?.[peer.peerIdSafe];
+  const remoteViewerCount = Object.keys(systemMetrics.peerStats ?? {}).length;
+
+  const slicedLocal = useMemo(
+    () => sliceHistoryByWindow(localHistory, selectedWindow),
+    [localHistory, selectedWindow]
+  );
+  const slicedPeer = useMemo(
+    () => sliceHistoryByWindow(peerHistory, selectedWindow),
+    [peerHistory, selectedWindow]
   );
 
   const windowMeta = WINDOW_CONFIG[selectedWindow];
+  const activeTimestamps = isLocal ? slicedLocal : slicedPeer;
   const latestTimestamp =
-    slicedHistory.length > 0 ? slicedHistory[slicedHistory.length - 1].timestamp : Date.now();
+    activeTimestamps.length > 0 ? activeTimestamps[activeTimestamps.length - 1].timestamp : Date.now();
 
   const currentBitrateKbps = Math.round(
-    systemMetrics.outboundBitrateKbps > 0
-      ? systemMetrics.outboundBitrateKbps
-      : systemMetrics.inboundBitrateKbps
+    isLocal ? systemMetrics.outboundBitrateKbps : (peerStats?.inboundBitrateKbps ?? 0)
   );
 
   const bitrateChartData = useMemo(() => {
-    if (slicedHistory.length > 0) {
-      return slicedHistory.map((point) => ({
-        timeLabel: formatRelativeTime(point.timestamp, latestTimestamp),
-        value: Math.round(point.bitrateKbps),
-      }));
-    }
-    if (currentBitrateKbps > 0) {
+    const points = isLocal
+      ? slicedLocal.map((point) => ({
+          timeLabel: formatRelativeTime(point.timestamp, latestTimestamp),
+          value: Math.round(point.bitrateKbps),
+        }))
+      : slicedPeer.map((point) => ({
+          timeLabel: formatRelativeTime(point.timestamp, latestTimestamp),
+          value: Math.round(point.inboundBitrateKbps),
+        }));
+
+    if (points.length === 0 && currentBitrateKbps > 0) {
       return [{ timeLabel: 'Now', value: currentBitrateKbps }];
     }
-    return [];
-  }, [currentBitrateKbps, latestTimestamp, slicedHistory]);
+    return points;
+  }, [currentBitrateKbps, isLocal, latestTimestamp, slicedLocal, slicedPeer]);
 
   const bitrateValues = bitrateChartData.map((item) => item.value);
   const peakBitrate = bitrateValues.length > 0 ? Math.max(...bitrateValues) : currentBitrateKbps;
@@ -153,45 +262,59 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
     nonZeroBitrates.length > 0 ? Math.min(...nonZeroBitrates) : currentBitrateKbps;
 
   const currentFps = Math.round(
-    systemMetrics.outboundFps > 0 ? systemMetrics.outboundFps : systemMetrics.inboundFps
+    isLocal
+      ? systemMetrics.outboundFps > 0
+        ? systemMetrics.outboundFps
+        : systemMetrics.localCaptureFps
+      : (peerStats?.inboundFps ?? 0)
   );
+  const targetFps = isLocal
+    ? localFpsSetting
+    : (peerStream?.fps ?? (currentFps > 0 ? currentFps : 60));
 
   const fpsChartData = useMemo(() => {
-    if (slicedHistory.length > 0) {
-      return slicedHistory.map((point) => ({
-        timeLabel: formatRelativeTime(point.timestamp, latestTimestamp),
-        fps: Math.round(point.outboundFps > 0 ? point.outboundFps : point.inboundFps),
-      }));
-    }
-    if (currentFps > 0) {
+    const points = isLocal
+      ? slicedLocal.map((point) => ({
+          timeLabel: formatRelativeTime(point.timestamp, latestTimestamp),
+          fps: Math.round(point.outboundFps),
+        }))
+      : slicedPeer.map((point) => ({
+          timeLabel: formatRelativeTime(point.timestamp, latestTimestamp),
+          fps: Math.round(point.inboundFps),
+        }));
+
+    if (points.length === 0 && currentFps > 0) {
       return [{ timeLabel: 'Now', fps: currentFps }];
     }
-    return [];
-  }, [currentFps, latestTimestamp, slicedHistory]);
+    return points;
+  }, [currentFps, isLocal, latestTimestamp, slicedLocal, slicedPeer]);
 
-  const fpsJitter = computeFpsJitter(fpsChartData.map((item) => item.fps));
-  const smoothness = getSmoothnessRating(
-    currentFps,
-    fps,
-    fpsJitter,
-    systemMetrics.droppedFrames
-  );
+  const fpsDelta = computeFpsDeltaAvg(fpsChartData.map((item) => item.fps));
+  const droppedFrames = isLocal ? 0 : (peerStats?.inboundDroppedFrames ?? 0);
+  const smoothness = getSmoothnessRating(currentFps, targetFps, fpsDelta, droppedFrames);
   const frameTimeMs = currentFps > 0 ? (1000 / currentFps).toFixed(1) : '--';
 
-  const rttSparkData = useMemo(() => {
-    if (slicedHistory.length > 0) {
-      return slicedHistory.map((point) => ({
-        value: Math.round(point.rttMs),
-        label: formatRelativeTime(point.timestamp, latestTimestamp),
-      }));
-    }
-    if (systemMetrics.rttMs > 0) {
-      return [{ value: Math.round(systemMetrics.rttMs), label: 'Now' }];
-    }
-    return [];
-  }, [latestTimestamp, slicedHistory, systemMetrics.rttMs]);
+  const rttValue = Math.round(isLocal ? systemMetrics.rttMs : (peerStats?.rttMs ?? 0));
+  const rttLossPct = isLocal ? systemMetrics.packetLossPercent : (peerStats?.packetLossPercent ?? 0);
+  const rttJitterMs = Math.round(isLocal ? systemMetrics.jitterMs : (peerStats?.jitterMs ?? 0));
 
-  const rttValue = Math.round(systemMetrics.rttMs);
+  const rttSparkData = useMemo(() => {
+    const points = isLocal
+      ? slicedLocal.map((point) => ({
+          value: Math.round(point.rttMs),
+          label: formatRelativeTime(point.timestamp, latestTimestamp),
+        }))
+      : slicedPeer.map((point) => ({
+          value: Math.round(point.rttMs),
+          label: formatRelativeTime(point.timestamp, latestTimestamp),
+        }));
+
+    if (points.length === 0 && rttValue > 0) {
+      return [{ value: rttValue, label: 'Now' }];
+    }
+    return points;
+  }, [isLocal, latestTimestamp, rttValue, slicedLocal, slicedPeer]);
+
   const rttColor = rttValue > 110 ? '#ff5f56' : rttValue > 45 ? '#e3c54e' : '#7bd0ff';
   const rttBadgeClass =
     rttValue <= 0
@@ -202,9 +325,40 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           ? styles.statusWarn
           : styles.statusError;
 
+  const videoCodec = isLocal ? systemMetrics.activeCodec : (peerStats?.inboundCodec ?? '');
+  const videoAccel = isLocal
+    ? systemMetrics.isHardwareAccelerated
+    : (peerStats?.isDecoderHardwareAccelerated ?? null);
+  const videoImpl = isLocal
+    ? systemMetrics.encoderImplementation
+    : (peerStats?.decoderImplementation ?? '');
+  const pipelineRole = isLocal ? 'Encoder' : 'Decoder';
+  const pipelineSummary =
+    videoAccel === true
+      ? `HW ${pipelineRole}${videoCodec ? ` · ${videoCodec}` : ''}`
+      : videoAccel === false
+        ? `SW ${pipelineRole}${videoCodec ? ` · ${videoCodec}` : ''}`
+        : `Auto ${pipelineRole}${videoCodec ? ` · ${videoCodec}` : ''}`;
+
+  const streamWidth = isLocal ? systemMetrics.localWidth : (peerStats?.inboundWidth ?? 0);
+  const streamHeight = isLocal ? systemMetrics.localHeight : (peerStats?.inboundHeight ?? 0);
+  const resolutionSummary =
+    streamWidth > 0 && streamHeight > 0
+      ? `${streamWidth}×${streamHeight}`
+      : isLocal
+        ? formatResolutionLabel(localResolutionSetting)
+        : peerStream?.resolution || 'Live';
+
   const cpuPct = Math.max(0, Math.min(100, Math.round(systemMetrics.cpuUsagePercent)));
-  const ramUsedGb = (systemMetrics.memoryUsedMb / 1024).toFixed(1);
+  const cpuLabel =
+    systemMetrics.cpuSource === 'system'
+      ? `OS CPU (${systemMetrics.cpuCores || 0}T)`
+      : systemMetrics.cpuSource === 'event-loop'
+        ? `UI Thread (${systemMetrics.cpuCores || 0}T)`
+        : 'CPU';
+
   const ramTotalGb = (systemMetrics.memoryTotalMb / 1024).toFixed(1);
+  const ramUsedGb = (systemMetrics.memoryUsedMb / 1024).toFixed(1);
   const ramPct =
     systemMetrics.memoryTotalMb > 0
       ? Math.max(
@@ -212,28 +366,52 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           Math.min(100, Math.round((systemMetrics.memoryUsedMb / systemMetrics.memoryTotalMb) * 100))
         )
       : 0;
+  const memLabel =
+    systemMetrics.memorySource === 'system'
+      ? 'System RAM'
+      : systemMetrics.memorySource === 'js-heap'
+        ? 'JS Heap'
+        : 'Memory';
+  const memValueText =
+    systemMetrics.memorySource === 'system'
+      ? `${ramUsedGb} / ${ramTotalGb} GB`
+      : systemMetrics.memorySource === 'js-heap'
+        ? `${systemMetrics.memoryUsedMb} MB / ${ramTotalGb} GB`
+        : 'N/A';
 
-  const encoderSummary =
-    systemMetrics.isHardwareAccelerated === true
-      ? `HW Encoder${systemMetrics.activeCodec ? ` · ${systemMetrics.activeCodec}` : ''}`
-      : systemMetrics.isHardwareAccelerated === false
-        ? `SW Fallback${systemMetrics.activeCodec ? ` · ${systemMetrics.activeCodec}` : ''}`
-        : `Auto Encoder${systemMetrics.activeCodec ? ` · ${systemMetrics.activeCodec}` : ''}`;
-
-  const healthPct = computeChannelHealthPercent(isConnected, systemMetrics);
-  const isAudioSynchronized =
-    isConnected &&
-    (systemMetrics.audioBitrateKbps > 0 ||
-      systemMetrics.audioJitterBufferMs > 0 ||
-      hasActiveAudioStreams);
-
-  const audioBufferMs = Math.round(systemMetrics.audioJitterBufferMs);
-  const audioHealthPct = isAudioSynchronized
-    ? Math.max(15, Math.min(100, Math.round(100 - Math.min(80, audioBufferMs * 0.7))))
-    : 0;
+  const transportStatus = resolveTransportStatus(isConnected, isLocal, systemMetrics, peerStats);
+  const audio: AudioTelemetryDto = isLocal
+    ? systemMetrics.localAudio
+    : (peerStats?.inboundAudio ?? EMPTY_AUDIO_TELEMETRY);
+  const audioView = resolveAudioCardView(audio, isLocal);
 
   return (
     <div className={styles.panelRoot} data-testid="telemetry-panel">
+      {/* Inspected User Stream Identity */}
+      <div className={styles.userHeaderCard} data-testid="telemetry-user-header">
+        <div className={styles.userIdentity}>
+          <img
+            src={peer.avatarUrl || ELFY_MASCOT_ICON}
+            alt={peer.displayName}
+            className={styles.userAvatar}
+          />
+          <div className={styles.userTextBlock}>
+            <div className={styles.userNameRow}>
+              <span className={styles.userName} title={peer.displayName}>
+                {peer.displayName}
+              </span>
+              <span className={styles.streamDirectionTag}>
+                {isLocal ? 'OUTBOUND' : 'INBOUND'}
+              </span>
+            </div>
+            <span className={styles.userSubMeta}>
+              {resolutionSummary} · {currentFps > 0 ? `${currentFps} FPS` : `${targetFps} FPS target`}
+            </span>
+          </div>
+        </div>
+        <span className={`${styles.statusPill} ${styles.statusGood}`}>LIVE</span>
+      </div>
+
       {/* Time Window Selector */}
       <div className={styles.windowBar}>
         <span className={styles.windowLabel}>Analysis Window</span>
@@ -282,11 +460,17 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
         <div className={styles.cardFooter}>
           <span className={styles.codecBadge}>
-            Codec: {systemMetrics.activeCodec || 'Auto'} ({formatEncoderLabel(systemMetrics)})
+            Codec: {videoCodec || 'Auto'} ({formatCodecAccelLabel(videoAccel, videoImpl)})
           </span>
           <div className={styles.footerStatsGroup}>
-            <span>Peak: {peakBitrate.toLocaleString()} kbps</span>
-            <span>Min: {minBitrate.toLocaleString()} kbps</span>
+            {isLocal && remoteViewerCount === 0 ? (
+              <span>0 viewers connected</span>
+            ) : (
+              <>
+                <span>Peak: {peakBitrate.toLocaleString()} kbps</span>
+                <span>Min: {minBitrate.toLocaleString()} kbps</span>
+              </>
+            )}
           </div>
         </div>
       </section>
@@ -314,7 +498,7 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         <div className={styles.chartWrap}>
           <FpsLineChart
             data={fpsChartData}
-            targetFps={fps}
+            targetFps={targetFps}
             accentColor="#7bd0ff"
             height={100}
             startLabel={windowMeta.startLabel}
@@ -324,14 +508,18 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
         </div>
 
         <div className={styles.cardFooter}>
-          <span>Dropped: {systemMetrics.droppedFrames}</span>
+          {isLocal ? (
+            <span>Limit: {formatLimitationLabel(systemMetrics.qualityLimitationReason)}</span>
+          ) : (
+            <span>Dropped: {droppedFrames}</span>
+          )}
           <span>Frame: {frameTimeMs} ms</span>
-          <span>Target: {fps} FPS</span>
-          <span>Jitter: ±{fpsJitter} fps</span>
+          <span>Target: {targetFps} FPS</span>
+          <span>Avg Δ: ±{fpsDelta} fps</span>
         </div>
       </section>
 
-      {/* 2-col row: RTT Latency + Host Hardware */}
+      {/* 2-col row: RTT Latency + Local Device Load */}
       <div className={styles.twoColGrid}>
         <section className={styles.compactCard} data-testid="telemetry-rtt-chart">
           <div className={styles.compactHeader}>
@@ -350,14 +538,16 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
           />
 
           <div className={styles.compactFooter}>
-            <span>Loss: {systemMetrics.packetLossPercent.toFixed(1)}%</span>
-            <span>Jitter: {Math.round(systemMetrics.jitterMs)}ms</span>
+            <span>Loss: {rttLossPct.toFixed(1)}%</span>
+            <span>Jitter: {rttJitterMs}ms</span>
           </div>
         </section>
 
-        <section className={styles.compactCard}>
+        <section className={styles.compactCard} data-testid="telemetry-device-card">
           <div className={styles.compactHeader}>
-            <span className={styles.compactTitle}>Host Hardware</span>
+            <span className={styles.compactTitle}>
+              {isLocal ? 'Host Device (You)' : 'Local Device'}
+            </span>
             <span
               className={`${styles.statusPill} ${
                 systemMetrics.highLoadWarning ? styles.statusError : styles.statusGood
@@ -369,25 +559,23 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
 
           <div className={styles.meterBlock}>
             <div className={styles.meterLabelRow}>
-              <span>CPU ({systemMetrics.cpuCores || 0}T)</span>
-              <span>{cpuPct}%</span>
+              <span>{cpuLabel}</span>
+              <span>{systemMetrics.cpuSource === 'unavailable' ? 'N/A' : `${cpuPct}%`}</span>
             </div>
             <div className={styles.progressTrack}>
               <div
                 className={`${styles.progressFill} ${
                   cpuPct >= 80 ? styles.progressWarn : styles.progressPrimary
                 }`}
-                style={{ width: `${cpuPct}%` }}
+                style={{ width: `${systemMetrics.cpuSource === 'unavailable' ? 0 : cpuPct}%` }}
               />
             </div>
           </div>
 
           <div className={styles.meterBlock}>
             <div className={styles.meterLabelRow}>
-              <span>RAM</span>
-              <span>
-                {ramUsedGb} / {ramTotalGb} GB
-              </span>
+              <span>{memLabel}</span>
+              <span>{memValueText}</span>
             </div>
             <div className={styles.progressTrack}>
               <div
@@ -399,14 +587,14 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             </div>
           </div>
 
-          <div className={styles.encoderLine} title={encoderSummary}>
-            {encoderSummary}
+          <div className={styles.encoderLine} title={pipelineSummary}>
+            {pipelineSummary}
           </div>
         </section>
       </div>
 
-      {/* WebRTC DataChannel */}
-      <section className={styles.securityCard}>
+      {/* WebRTC Transport */}
+      <section className={styles.securityCard} data-testid="telemetry-transport-card">
         <div className={styles.securityLeft}>
           <div className={styles.shieldIconWrap}>
             <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
@@ -414,64 +602,78 @@ export const TelemetryPanel: React.FC<TelemetryPanelProps> = ({
             </span>
           </div>
           <div className={styles.securityMeta}>
-            <span className={styles.securityTitle}>WebRTC DataChannel</span>
-            <span className={styles.securitySubtitle}>E2EE Encrypted · SRTP/DTLS</span>
+            <span className={styles.securityTitle}>WebRTC P2P Transport</span>
+            <span className={styles.securitySubtitle}>{transportStatus.subtitle}</span>
           </div>
         </div>
-        <span
-          className={`${styles.statusPill} ${
-            healthPct >= 80 ? styles.statusGood : healthPct > 0 ? styles.statusWarn : styles.statusError
-          }`}
-        >
-          {healthPct}% OK
+        <span className={`${styles.statusPill} ${transportStatus.badgeClass}`}>
+          {transportStatus.badgeText}
         </span>
       </section>
 
-      {/* Audio Buffer & Flow */}
-      <section className={styles.card}>
+      {/* Audio Buffer & Flow (Strictly Real Track & WebRTC Audio Stats) */}
+      <section className={styles.card} data-testid="telemetry-audio-card">
         <div className={styles.audioHeaderRow}>
           <div className={styles.cardTitleGroup}>
             <span className="material-symbols-outlined" style={{ fontSize: '16px', color: 'var(--tertiary)' }}>
               graphic_eq
             </span>
-            <span className={styles.cardTitle}>Audio Buffer &amp; Flow</span>
-          </div>
-          <span
-            className={`${styles.statusPill} ${
-              isAudioSynchronized ? styles.statusGood : styles.statusStandby
-            }`}
-          >
-            {isAudioSynchronized ? 'SYNCHRONIZED' : 'STANDBY'}
-          </span>
-        </div>
-
-        <div className={styles.audioSpecRow}>
-          <span className={styles.audioCodecName}>{systemMetrics.audioCodec || 'Opus'} Stereo</span>
-          <span className={styles.audioRateMono}>
-            48kHz · {Math.round(systemMetrics.audioBitrateKbps)} kbps
-          </span>
-        </div>
-
-        <div className={styles.meterBlock}>
-          <div className={styles.meterLabelRow}>
-            <span>Jitter Buffer Health</span>
-            <span>
-              {audioBufferMs}ms · {systemMetrics.audioPacketsLost} pkt lost
+            <span className={styles.cardTitle}>
+              {isLocal ? 'Outbound Audio Flow' : 'Audio Buffer & Flow'}
             </span>
           </div>
-          <div className={styles.progressTrack}>
-            <div
-              className={`${styles.progressFill} ${
-                audioHealthPct >= 70
-                  ? styles.progressGood
-                  : audioHealthPct >= 40
-                    ? styles.progressSecondary
-                    : styles.progressWarn
-              }`}
-              style={{ width: `${audioHealthPct}%` }}
-            />
-          </div>
+          <span className={`${styles.statusPill} ${audioView.badgeClass}`}>
+            {audioView.badgeText}
+          </span>
         </div>
+
+        {!audio.hasAudio ? (
+          <>
+            <div className={styles.audioSpecRow}>
+              <span className={styles.audioCodecName}>Video Only Stream</span>
+              <span className={styles.audioRateMono}>0 audio tracks</span>
+            </div>
+            <div className={styles.audioMutedNote}>
+              No active audio track or audio RTP stream detected.
+            </div>
+          </>
+        ) : (
+          <>
+            <div className={styles.audioSpecRow}>
+              <span className={styles.audioCodecName}>
+                {audio.codec || 'Audio'}
+                {formatChannelLabel(audio.channels)}
+              </span>
+              <span className={styles.audioRateMono}>
+                {formatSampleRateLabel(audio.sampleRateHz)}
+                {audio.bitrateKbps} kbps
+              </span>
+            </div>
+
+            <div className={styles.meterBlock}>
+              <div className={styles.meterLabelRow}>
+                <span>{isLocal ? 'Outbound Audio RTP' : 'Jitter Buffer'}</span>
+                <span>
+                  {isLocal
+                    ? `jitter ${audio.jitterMs}ms · ${audio.packetsLost} pkt lost`
+                    : `${audio.jitterBufferMs}ms · ${audio.packetsLost} pkt lost`}
+                </span>
+              </div>
+              <div className={styles.progressTrack}>
+                <div
+                  className={`${styles.progressFill} ${
+                    audioView.barPct >= 70
+                      ? styles.progressGood
+                      : audioView.barPct >= 40
+                        ? styles.progressSecondary
+                        : styles.progressWarn
+                  }`}
+                  style={{ width: `${audioView.barPct}%` }}
+                />
+              </div>
+            </div>
+          </>
+        )}
       </section>
     </div>
   );

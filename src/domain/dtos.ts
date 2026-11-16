@@ -7,6 +7,7 @@ export type KnockStatus = 'idle' | 'knocking' | 'accepted' | 'rejected' | 'timeo
 export type WatchLayoutMode = 'grid' | 'spotlight' | 'focus' | 'fullscreen';
 export type ScreenMode = 'multi-stream' | 'friend-hubs' | 'nickname' | 'left-hub';
 export type HubLiveState = 'broadcasting' | 'online' | 'offline';
+export type MetricSourceKind = 'system' | 'js-heap' | 'event-loop' | 'unavailable';
 export type ConnectionFailureStage =
   | 'signaling_broker'
   | 'sdp_handshake'
@@ -122,15 +123,48 @@ export interface HostResourceMetricsDto {
   highLoadWarning: boolean;
 }
 
+export interface AudioTelemetryDto {
+  hasAudio: boolean;
+  trackCount: number;
+  codec: string;
+  sampleRateHz: number;
+  channels: number;
+  bitrateKbps: number;
+  jitterBufferMs: number;
+  jitterMs: number;
+  packetsLost: number;
+  packetLossPercent: number;
+  audioLevel: number | null;
+}
+
 export interface PeerTelemetryDto {
   peerIdSafe: string;
   rttMs: number;
+  inboundBitrateKbps: number;
+  inboundFps: number;
+  inboundWidth: number;
+  inboundHeight: number;
+  inboundDroppedFrames: number;
+  inboundCodec: string;
+  decoderImplementation: string;
+  isDecoderHardwareAccelerated: boolean | null;
+  inboundAudio: AudioTelemetryDto;
+  outboundBitrateKbps: number;
+  outboundFps: number;
+  outboundWidth: number;
+  outboundHeight: number;
+  outboundCodec: string;
+  encoderImplementation: string;
+  isEncoderHardwareAccelerated: boolean | null;
+  outboundQualityLimitationReason: StreamQualityLimitationReason;
+  outboundAudio: AudioTelemetryDto;
   bitrateKbps: number;
   fps: number;
   packetLossPercent: number;
   jitterMs: number;
   connectionState: RTCPeerConnectionState | 'unknown';
   dataChannelState: RTCDataChannelState | 'closed';
+  dtlsState: string;
 }
 
 export interface TelemetryHistoryPointDto {
@@ -152,8 +186,14 @@ export interface PeerTelemetryHistoryPointDto {
   timestamp: number;
   rttMs: number;
   bitrateKbps: number;
+  inboundBitrateKbps: number;
+  outboundBitrateKbps: number;
   fps: number;
+  inboundFps: number;
+  outboundFps: number;
   packetLossPercent: number;
+  jitterMs: number;
+  droppedFrames: number;
 }
 
 export interface SystemMetricsDto {
@@ -161,9 +201,14 @@ export interface SystemMetricsDto {
   memoryUsedMb: number;
   memoryTotalMb: number;
   highLoadWarning: boolean;
+  cpuSource: MetricSourceKind;
+  memorySource: MetricSourceKind;
   cpuCores: number;
   outboundFps: number;
   inboundFps: number;
+  localWidth: number;
+  localHeight: number;
+  localCaptureFps: number;
   droppedFrames: number;
   rttMs: number;
   activeCodec: string;
@@ -178,6 +223,7 @@ export interface SystemMetricsDto {
   audioBitrateKbps: number;
   audioJitterBufferMs: number;
   audioPacketsLost: number;
+  localAudio: AudioTelemetryDto;
   peerStats: Record<string, PeerTelemetryDto>;
 }
 

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useNavigate } from 'react-router-dom';
 import styles from './RegisterPage.module.css';
 import { UserProfile } from '../../domain/dtos';
@@ -20,6 +21,18 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onRegistered }) => {
     saveProfile,
     setTelemetryConsent,
   } = useProfile();
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    try {
+      const currentWindow = getCurrentWindow();
+      if (currentWindow.label !== 'register') return;
+      void currentWindow.show().catch(() => {});
+      void currentWindow.setFocus().catch(() => {});
+    } catch {
+      // Ignore outside Tauri window context.
+    }
+  }, []);
 
   const handleRegistrationComplete = async (savedProfile: UserProfile): Promise<void> => {
     await onRegistered?.(savedProfile);

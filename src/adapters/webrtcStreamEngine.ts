@@ -200,7 +200,11 @@ export class WebRtcStreamEngine implements IStreamEngine {
   }
 
   getStatsSnapshot(): Promise<WebRtcStatsSnapshot> {
-    return collectWebRtcStats(this.peers.values(), this.statsTracker);
+    return collectWebRtcStats(
+      this.peers.values(),
+      this.statsTracker,
+      this.captureManager.getLocalStream()
+    );
   }
 }
 

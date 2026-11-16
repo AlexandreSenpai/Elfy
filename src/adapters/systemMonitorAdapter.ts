@@ -1,4 +1,5 @@
-import { HostResourceMetricsDto, SystemMetricsDto } from '../domain/dtos';
+import { EMPTY_AUDIO_TELEMETRY } from '../domain/config';
+import { HostResourceMetricsDto, MetricSourceKind, SystemMetricsDto } from '../domain/dtos';
 import { IStreamEngine, ISystemMonitor, WebRtcStatsSnapshot } from '../ports';
 import { getSystemMetricsTauri, isTauri } from '../utils/tauri';
 
@@ -19,6 +20,9 @@ const HIGH_DROPPED_FRAMES_THRESHOLD = 45;
 const EMPTY_RTC_STATS: WebRtcStatsSnapshot = {
   outboundFps: 0,
   inboundFps: 0,
+  localWidth: 0,
+  localHeight: 0,
+  localCaptureFps: 0,
   droppedFrames: 0,
   rttMs: 0,
   activeCodec: '',
@@ -33,53 +37,64 @@ const EMPTY_RTC_STATS: WebRtcStatsSnapshot = {
   audioBitrateKbps: 0,
   audioJitterBufferMs: 0,
   audioPacketsLost: 0,
+  localAudio: { ...EMPTY_AUDIO_TELEMETRY },
   peerStats: {},
 };
 
-const measureBrowserEventLoopLoad = (): Promise<number> => {
-  if (typeof performance === 'undefined') return Promise.resolve(12);
+const measureBrowserEventLoopLoad = (): Promise<{ percent: number; source: MetricSourceKind }> => {
+  if (typeof performance === 'undefined') {
+    return Promise.resolve({ percent: 0, source: 'unavailable' });
+  }
 
   return new Promise((resolve) => {
     const start = performance.now();
     globalThis.setTimeout(() => {
       const driftMs = Math.max(0, performance.now() - start - 16);
-      const estimatedCpu = Math.min(98, Math.round(12 + driftMs * 1.8));
-      resolve(estimatedCpu);
+      const estimatedLoad = Math.min(100, Math.round(driftMs * 1.8));
+      resolve({ percent: estimatedLoad, source: 'event-loop' });
     }, 16);
   });
 };
 
-const sampleBrowserHostMetrics = async (): Promise<HostResourceMetricsDto> => {
-  const cpuUsagePercent = await measureBrowserEventLoopLoad();
+const sampleBrowserHostMetrics = async (): Promise<
+  HostResourceMetricsDto & { cpuSource: MetricSourceKind; memorySource: MetricSourceKind }
+> => {
+  const loopLoad = await measureBrowserEventLoopLoad();
   const perf = typeof performance !== 'undefined' ? (performance as PerformanceWithMemory) : null;
   const mem = perf?.memory;
 
   if (!mem || !mem.jsHeapSizeLimit) {
     return {
-      cpuUsagePercent,
-      memoryUsedMb: 256,
-      memoryTotalMb: 4096,
-      highLoadWarning: cpuUsagePercent >= HIGH_CPU_THRESHOLD,
+      cpuUsagePercent: loopLoad.percent,
+      memoryUsedMb: 0,
+      memoryTotalMb: 0,
+      highLoadWarning: loopLoad.percent >= HIGH_CPU_THRESHOLD,
+      cpuSource: loopLoad.source,
+      memorySource: 'unavailable',
     };
   }
 
   const memoryUsedMb = Math.round(mem.usedJSHeapSize / (1024 * 1024));
-  const memoryTotalMb = Math.max(512, Math.round(mem.jsHeapSizeLimit / (1024 * 1024)));
+  const memoryTotalMb = Math.max(1, Math.round(mem.jsHeapSizeLimit / (1024 * 1024)));
   const highRam = memoryUsedMb / memoryTotalMb >= HIGH_RAM_RATIO;
 
   return {
-    cpuUsagePercent,
+    cpuUsagePercent: loopLoad.percent,
     memoryUsedMb,
     memoryTotalMb,
-    highLoadWarning: cpuUsagePercent >= HIGH_CPU_THRESHOLD || highRam,
+    highLoadWarning: loopLoad.percent >= HIGH_CPU_THRESHOLD || highRam,
+    cpuSource: loopLoad.source,
+    memorySource: 'js-heap',
   };
 };
 
-/** Combines OS CPU/RAM metrics (Tauri sysinfo or browser estimate) with WebRTC stats. */
+/** Combines OS CPU/RAM metrics (Tauri sysinfo or honest browser heap/loop stats) with WebRTC stats. */
 export class SystemMonitorAdapter implements ISystemMonitor {
   async sampleMetrics(streamEngine?: IStreamEngine): Promise<SystemMetricsDto> {
     const tauriMetrics = isTauri() ? await getSystemMetricsTauri() : null;
-    const hostMetrics = tauriMetrics ?? (await sampleBrowserHostMetrics());
+    const hostMetrics = tauriMetrics
+      ? { ...tauriMetrics, cpuSource: 'system' as const, memorySource: 'system' as const }
+      : await sampleBrowserHostMetrics();
     const rtcStats = streamEngine ? await streamEngine.getStatsSnapshot() : EMPTY_RTC_STATS;
 
     const softwareFallbackActive =
@@ -104,9 +119,14 @@ export class SystemMonitorAdapter implements ISystemMonitor {
       memoryUsedMb: hostMetrics.memoryUsedMb,
       memoryTotalMb: hostMetrics.memoryTotalMb,
       highLoadWarning: hostMetrics.highLoadWarning || streamStruggling,
+      cpuSource: hostMetrics.cpuSource,
+      memorySource: hostMetrics.memorySource,
       cpuCores,
       outboundFps: Math.round(rtcStats.outboundFps),
       inboundFps: Math.round(rtcStats.inboundFps),
+      localWidth: rtcStats.localWidth,
+      localHeight: rtcStats.localHeight,
+      localCaptureFps: rtcStats.localCaptureFps,
       droppedFrames: rtcStats.droppedFrames,
       rttMs: Math.round(rtcStats.rttMs),
       activeCodec: rtcStats.activeCodec,
@@ -121,6 +141,7 @@ export class SystemMonitorAdapter implements ISystemMonitor {
       audioBitrateKbps: rtcStats.audioBitrateKbps,
       audioJitterBufferMs: rtcStats.audioJitterBufferMs,
       audioPacketsLost: rtcStats.audioPacketsLost,
+      localAudio: rtcStats.localAudio,
       peerStats: rtcStats.peerStats,
     };
   }

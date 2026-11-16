@@ -10,6 +10,88 @@
   overflow-x: hidden;
 }
 
+/* Inspected Streamer Identity Header */
+.userHeaderCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, rgba(123, 208, 255, 0.1), rgba(17, 24, 34, 0.94));
+  border: 1px solid rgba(123, 208, 255, 0.25);
+  min-width: 0;
+  flex-shrink: 0;
+}
+
+.userIdentity {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+.userAvatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1.5px solid rgba(255, 255, 255, 0.18);
+  background-color: var(--surface-lowest);
+  flex-shrink: 0;
+}
+
+.userTextBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.userNameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.userName {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.streamDirectionTag {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background-color: rgba(255, 77, 109, 0.16);
+  color: var(--primary-dim);
+  border: 1px solid rgba(255, 77, 109, 0.35);
+  flex-shrink: 0;
+}
+
+.userSubMeta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audioMutedNote {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--on-surface-muted);
+}
+
 /* Analysis Window Segmented Bar */
 .windowBar {
   display: flex;

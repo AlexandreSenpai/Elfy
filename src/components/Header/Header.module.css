@@ -196,13 +196,6 @@
 }
 
 /* Participants Avatar Stack & Telemetry Controls */
-.panelBtnGroup {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
 .participantsPill {
   display: inline-flex;
   align-items: center;
@@ -246,25 +239,6 @@
   font-size: 11px;
   font-weight: 700;
   color: var(--on-surface);
-}
-
-.telemetryBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--radius-full);
-  background-color: var(--surface-container);
-  border: 1px solid var(--outline-variant);
-  color: var(--secondary);
-  cursor: pointer;
-  transition: all 0.18s ease;
-}
-
-.telemetryBtn:hover {
-  background-color: var(--surface-container-high);
-  border-color: rgba(123, 208, 255, 0.5);
 }
 
 .panelPillActive {
@@ -409,19 +383,10 @@
     gap: 4px;
   }
 
-  .panelBtnGroup {
-    gap: 4px;
-  }
-
   .participantsPill {
     height: 28px;
     padding: 2px 7px 2px 3px;
     gap: 4px;
-  }
-
-  .telemetryBtn {
-    width: 28px;
-    height: 28px;
   }
 
   .userAvatar {

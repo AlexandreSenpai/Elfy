@@ -1,5 +1,6 @@
 import { MutableRefObject } from 'react';
 import { DEFAULT_USER_PROFILE } from '../../data/mockData';
+import { EMPTY_AUDIO_TELEMETRY } from '../../domain/config';
 import {
   DataChannelEnvelopeDto,
   LocalWindowBusMessage,
@@ -23,9 +24,14 @@ export const EMPTY_METRICS: SystemMetricsDto = {
   memoryUsedMb: 0,
   memoryTotalMb: 0,
   highLoadWarning: false,
+  cpuSource: 'unavailable',
+  memorySource: 'unavailable',
   cpuCores: 0,
   outboundFps: 0,
   inboundFps: 0,
+  localWidth: 0,
+  localHeight: 0,
+  localCaptureFps: 0,
   droppedFrames: 0,
   rttMs: 0,
   activeCodec: '',
@@ -40,6 +46,7 @@ export const EMPTY_METRICS: SystemMetricsDto = {
   audioBitrateKbps: 0,
   audioJitterBufferMs: 0,
   audioPacketsLost: 0,
+  localAudio: { ...EMPTY_AUDIO_TELEMETRY },
   peerStats: {},
 };
 

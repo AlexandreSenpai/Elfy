@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef } from 'react';
 import styles from './ParticipantsPanel.module.css';
 import { ELFY_MASCOT_ICON } from '../../data/mockData';
 import {
@@ -10,15 +10,16 @@ import {
   StreamItem,
   StreamResolutionPreset,
   SystemMetricsDto,
+  TelemetryHistoryPointDto,
 } from '../../domain/dtos';
 import { formatResolutionLabel } from '../../hooks/room/roomHelpers';
 import { SparklineChart, SparklinePoint } from './TelemetryCharts';
 import { getVolumeIcon } from './StreamTile';
 
 export interface ParticipantsPanelProps {
-  hubId: string;
   localPeerIdSafe: string;
   localRole: RoomRole;
+  isSharing: boolean;
   peers: RoomPeerDto[];
   streams: StreamItem[];
   streamVolumes: Record<string, number>;
@@ -26,10 +27,24 @@ export interface ParticipantsPanelProps {
   fps: StreamFpsOption;
   resolution: StreamResolutionPreset;
   systemMetrics: SystemMetricsDto;
+  telemetryHistory: TelemetryHistoryPointDto[];
   peerTelemetryHistory: Record<string, PeerTelemetryHistoryPointDto[]>;
   onSetStreamVolume: (peerIdSafe: string, volume: number) => void;
   onKickPeer: (peerIdSafe: string, reason?: string) => void | Promise<void>;
+  onInspectPeerTelemetry: (peerIdSafe: string) => void;
 }
+
+export const isPeerActivelyStreaming = (
+  peer: RoomPeerDto,
+  localPeerIdSafe: string,
+  isSharing: boolean,
+  streams: StreamItem[]
+): boolean => {
+  if (peer.peerIdSafe === localPeerIdSafe) {
+    return isSharing || peer.isStreaming;
+  }
+  return peer.isStreaming || streams.some((stream) => stream.peerIdSafe === peer.peerIdSafe);
+};
 
 const getLatencyTierClass = (rttMs: number): string => {
   if (rttMs <= 0) return '';
@@ -43,23 +58,46 @@ const formatSampleTime = (timestamp: number): string => {
   return date.toLocaleTimeString([], { minute: '2-digit', second: '2-digit' });
 };
 
-const buildPeerSparkline = (
+const buildLocalSparkline = (
+  isLive: boolean,
+  telemetryHistory: TelemetryHistoryPointDto[],
+  systemMetrics: SystemMetricsDto
+): { points: SparklinePoint[]; color: string; unit: string } => {
+  if (!isLive) {
+    return { points: [], color: '#7bd0ff', unit: '' };
+  }
+  const recent = telemetryHistory.slice(-30);
+  const points = recent.map((point) => ({
+    value: Math.round(point.bitrateKbps),
+    label: formatSampleTime(point.timestamp),
+  }));
+  if (points.length === 0 && systemMetrics.outboundBitrateKbps > 0) {
+    points.push({ value: Math.round(systemMetrics.outboundBitrateKbps), label: 'Now' });
+  }
+  return { points, color: '#ff4d6d', unit: 'kbps' };
+};
+
+const buildRemotePeerSparkline = (
+  isLive: boolean,
   history: PeerTelemetryHistoryPointDto[] | undefined,
   liveStats: PeerTelemetryDto | undefined
 ): { points: SparklinePoint[]; color: string; unit: string } => {
-  const samples = history ?? [];
-  const hasBitrate =
-    samples.some((point) => point.bitrateKbps > 0) || (liveStats?.bitrateKbps ?? 0) > 0;
+  const samples = (history ?? []).slice(-30);
 
-  if (hasBitrate) {
-    const points = samples.map((point) => ({
-      value: Math.round(point.bitrateKbps),
-      label: formatSampleTime(point.timestamp),
-    }));
-    if (points.length === 0 && liveStats) {
-      points.push({ value: Math.round(liveStats.bitrateKbps), label: 'Now' });
+  if (isLive) {
+    const hasInboundBitrate =
+      samples.some((point) => point.inboundBitrateKbps > 0) ||
+      (liveStats?.inboundBitrateKbps ?? 0) > 0;
+    if (hasInboundBitrate) {
+      const points = samples.map((point) => ({
+        value: Math.round(point.inboundBitrateKbps),
+        label: formatSampleTime(point.timestamp),
+      }));
+      if (points.length === 0 && liveStats) {
+        points.push({ value: Math.round(liveStats.inboundBitrateKbps), label: 'Now' });
+      }
+      return { points, color: '#ff4d6d', unit: 'kbps' };
     }
-    return { points, color: '#ff4d6d', unit: 'kbps' };
   }
 
   const rttPoints = samples
@@ -75,22 +113,37 @@ const buildPeerSparkline = (
 };
 
 const resolveQualityText = (
-  peer: RoomPeerDto,
+  isLive: boolean,
   isLocal: boolean,
   peerStream: StreamItem | undefined,
+  liveStats: PeerTelemetryDto | undefined,
+  systemMetrics: SystemMetricsDto,
   hasAnyActiveStream: boolean,
   localResolution: StreamResolutionPreset,
   localFps: StreamFpsOption
 ): { label: string; isLive: boolean } => {
-  if (peerStream) {
-    return { label: `${peerStream.resolution} ${peerStream.fps}fps`, isLive: true };
+  if (isLive && isLocal) {
+    const activeFps =
+      systemMetrics.outboundFps > 0
+        ? systemMetrics.outboundFps
+        : systemMetrics.localCaptureFps || localFps;
+    const resLabel =
+      systemMetrics.localHeight > 0
+        ? `${systemMetrics.localHeight}p`
+        : formatResolutionLabel(localResolution);
+    return { label: `${resLabel} ${activeFps}fps`, isLive: true };
   }
-  if (peer.isStreaming) {
-    if (isLocal) {
-      return { label: `${formatResolutionLabel(localResolution)} ${localFps}fps`, isLive: true };
+
+  if (isLive && !isLocal) {
+    if (liveStats && liveStats.inboundHeight > 0 && liveStats.inboundFps > 0) {
+      return { label: `${liveStats.inboundHeight}p ${liveStats.inboundFps}fps`, isLive: true };
+    }
+    if (peerStream) {
+      return { label: `${peerStream.resolution} ${peerStream.fps}fps`, isLive: true };
     }
     return { label: 'Live Stream', isLive: true };
   }
+
   if (hasAnyActiveStream) {
     return { label: 'Watching', isLive: false };
   }
@@ -98,9 +151,9 @@ const resolveQualityText = (
 };
 
 export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
-  hubId,
   localPeerIdSafe,
   localRole,
+  isSharing,
   peers,
   streams,
   streamVolumes,
@@ -108,34 +161,13 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
   fps,
   resolution,
   systemMetrics,
+  telemetryHistory,
   peerTelemetryHistory,
   onSetStreamVolume,
   onKickPeer,
+  onInspectPeerTelemetry,
 }) => {
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
   const lastNonZeroVolumeRef = useRef<Map<string, number>>(new Map());
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-    };
-  }, []);
-
-  const handleCopyInvite = (): void => {
-    if (hubId) {
-      navigator.clipboard?.writeText(hubId).catch(() => {});
-    }
-    setCopied(true);
-    if (copyTimerRef.current !== null) {
-      window.clearTimeout(copyTimerRef.current);
-    }
-    copyTimerRef.current = window.setTimeout(() => {
-      setCopied(false);
-    }, 2000);
-  };
 
   const handleTogglePeerMute = (peerIdSafe: string, currentVolume: number): void => {
     if (currentVolume > 0) {
@@ -147,7 +179,9 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
     onSetStreamVolume(peerIdSafe, restored > 0 ? restored : 100);
   };
 
-  const hasAnyActiveStream = streams.length > 0 || peers.some((peer) => peer.isStreaming);
+  const hasAnyActiveStream =
+    isSharing || streams.length > 0 || peers.some((peer) => peer.isStreaming);
+  const remoteStatsCount = Object.keys(systemMetrics.peerStats ?? {}).length;
 
   return (
     <div className={styles.panelRoot} data-testid="participants-panel">
@@ -167,7 +201,7 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
             const isLocal = peer.peerIdSafe === localPeerIdSafe;
             const isOwner = peer.role === 'owner';
             const peerStream = streams.find((stream) => stream.peerIdSafe === peer.peerIdSafe);
-            const isLive = peer.isStreaming || Boolean(peerStream);
+            const isLive = isPeerActivelyStreaming(peer, localPeerIdSafe, isSharing, streams);
 
             const liveStats = systemMetrics.peerStats?.[peer.peerIdSafe];
             const history = peerTelemetryHistory[peer.peerIdSafe];
@@ -176,7 +210,9 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
 
             const rttMs = isLocal ? 0 : liveStats?.rttMs ?? latestHistory?.rttMs ?? 0;
             const lossPct = isLocal
-              ? systemMetrics.packetLossPercent
+              ? remoteStatsCount > 0
+                ? systemMetrics.packetLossPercent
+                : 0
               : liveStats?.packetLossPercent ?? latestHistory?.packetLossPercent ?? 0;
 
             const rawSavedVolume = streamVolumes[peer.peerIdSafe] ?? peerStream?.volume ?? 100;
@@ -188,20 +224,15 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
             }
 
             const sparkline = isLocal
-              ? {
-                  points:
-                    systemMetrics.outboundBitrateKbps > 0
-                      ? [{ value: Math.round(systemMetrics.outboundBitrateKbps), label: 'Now' }]
-                      : [],
-                  color: '#ff4d6d',
-                  unit: 'kbps',
-                }
-              : buildPeerSparkline(history, liveStats);
+              ? buildLocalSparkline(isLive, telemetryHistory, systemMetrics)
+              : buildRemotePeerSparkline(isLive, history, liveStats);
 
             const quality = resolveQualityText(
-              peer,
+              isLive,
               isLocal,
               peerStream,
+              liveStats,
+              systemMetrics,
               hasAnyActiveStream,
               resolution,
               fps
@@ -248,6 +279,7 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
                           </span>
                         )}
                       </div>
+
                       <span className={styles.peerTagText} title={peer.peerTag}>
                         {peer.peerTag}
                       </span>
@@ -256,8 +288,34 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
 
                   <div className={styles.topRightActions}>
                     <span className={`${styles.latencyBadge} ${getLatencyTierClass(rttMs)}`}>
-                      {rttMs > 0 ? `${Math.round(rttMs)}ms` : '--ms'}
+                      {isLocal ? 'Local' : rttMs > 0 ? `${Math.round(rttMs)}ms` : '--ms'}
                     </span>
+
+                    <button
+                      type="button"
+                      className={styles.telemetryIconBtn}
+                      data-testid="peer-telemetry-btn"
+                      disabled={!isLive}
+                      aria-label={
+                        isLive
+                          ? `View stream telemetry for ${peer.displayName}`
+                          : `${peer.displayName} is not streaming`
+                      }
+                      title={
+                        isLive
+                          ? `View ${peer.displayName}'s stream telemetry`
+                          : `${peer.displayName} is not currently streaming`
+                      }
+                      onClick={() => {
+                        if (isLive) {
+                          onInspectPeerTelemetry(peer.peerIdSafe);
+                        }
+                      }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
+                        monitoring
+                      </span>
+                    </button>
 
                     {canKick && (
                       <button
@@ -350,29 +408,6 @@ export const ParticipantsPanel: React.FC<ParticipantsPanelProps> = ({
             );
           })
         )}
-      </div>
-
-      <div className={styles.inviteCard}>
-        <div className={styles.inviteMeta}>
-          <span className={styles.inviteTitle}>Invite to Room</span>
-          <span className={styles.inviteSubtitle} title={hubId}>
-            Share instant hub code
-          </span>
-        </div>
-
-        <button
-          type="button"
-          className={`${styles.inviteBtn} ${copied ? styles.inviteBtnCopied : ''}`}
-          data-testid="invite-copy-btn"
-          onClick={handleCopyInvite}
-        >
-          {copied && (
-            <span className="material-symbols-outlined" style={{ fontSize: '15px' }}>
-              check
-            </span>
-          )}
-          <span>{copied ? 'Copied!' : '+ Invite'}</span>
-        </button>
       </div>
     </div>
   );

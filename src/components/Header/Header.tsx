@@ -11,7 +11,6 @@ import {
   toggleMaximizeWindowTauri,
 } from '../../utils/tauri';
 import { DockContextMenu, useDockContextMenu } from '../DockContextMenu/DockContextMenu';
-import type { HubSidePanelTab } from '../MultiStreamHub/HubSidePanel';
 
 interface HeaderProps {
   profile: UserProfile;
@@ -19,8 +18,8 @@ interface HeaderProps {
   layoutMode?: WatchLayoutMode;
   onSelectLayoutMode?: (mode: WatchLayoutMode) => void;
   peers?: RoomPeerDto[];
-  activePanelTab?: HubSidePanelTab | null;
-  onTogglePanelTab?: (tab: HubSidePanelTab) => void;
+  isPanelOpen?: boolean;
+  onTogglePanel?: () => void;
   onMinimizeHub?: () => void | Promise<void>;
   onCloseStream?: () => void | Promise<void>;
   onOpenProfile?: () => void | Promise<void>;
@@ -32,8 +31,8 @@ export const Header: React.FC<HeaderProps> = ({
   layoutMode,
   onSelectLayoutMode,
   peers,
-  activePanelTab = null,
-  onTogglePanelTab,
+  isPanelOpen = false,
+  onTogglePanel,
   onMinimizeHub,
   onCloseStream,
   onOpenProfile,
@@ -92,7 +91,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const showRoomControls = Boolean(layoutMode && onSelectLayoutMode);
-  const showPanelControls = Boolean(peers && onTogglePanelTab);
+  const showPanelControls = Boolean(peers && onTogglePanel);
   const previewPeers = (peers ?? []).slice(0, 3);
 
   return (
@@ -185,56 +184,38 @@ export const Header: React.FC<HeaderProps> = ({
             {copied && <span className={styles.copiedTag}>Copied!</span>}
           </button>
 
-          {showPanelControls && peers && onTogglePanelTab && (
-            <div className={styles.panelBtnGroup}>
-              <button
-                aria-label="Toggle Participants panel"
-                aria-pressed={activePanelTab === 'participants'}
-                className={`${styles.participantsPill} ${
-                  activePanelTab === 'participants' ? styles.panelPillActive : ''
-                }`}
-                data-testid="toggle-participants-panel-btn"
-                onClick={() => onTogglePanelTab('participants')}
-                title="Participants & Room Controls"
-                type="button"
-              >
-                <span className={styles.avatarStack}>
-                  {previewPeers.length > 0 ? (
-                    previewPeers.map((peer) => (
-                      <img
-                        key={peer.peerIdSafe}
-                        src={peer.avatarUrl || ELFY_MASCOT_ICON}
-                        alt={peer.displayName}
-                        className={styles.stackAvatar}
-                      />
-                    ))
-                  ) : (
+          {showPanelControls && peers && onTogglePanel && (
+            <button
+              aria-label="Toggle Participants panel"
+              aria-pressed={isPanelOpen}
+              className={`${styles.participantsPill} ${
+                isPanelOpen ? styles.panelPillActive : ''
+              }`}
+              data-testid="toggle-participants-panel-btn"
+              onClick={onTogglePanel}
+              title="Participants & Room Controls"
+              type="button"
+            >
+              <span className={styles.avatarStack}>
+                {previewPeers.length > 0 ? (
+                  previewPeers.map((peer) => (
                     <img
-                      src={profile.avatarUrl || ELFY_MASCOT_ICON}
-                      alt={profile.nickname}
+                      key={peer.peerIdSafe}
+                      src={peer.avatarUrl || ELFY_MASCOT_ICON}
+                      alt={peer.displayName}
                       className={styles.stackAvatar}
                     />
-                  )}
-                </span>
-                <span className={styles.participantsCount}>{peers.length}</span>
-              </button>
-
-              <button
-                aria-label="Toggle Telemetry & Stats panel"
-                aria-pressed={activePanelTab === 'telemetry'}
-                className={`${styles.telemetryBtn} ${
-                  activePanelTab === 'telemetry' ? styles.panelPillActive : ''
-                }`}
-                data-testid="toggle-telemetry-panel-btn"
-                onClick={() => onTogglePanelTab('telemetry')}
-                title="Telemetry & Stats"
-                type="button"
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>
-                  monitoring
-                </span>
-              </button>
-            </div>
+                  ))
+                ) : (
+                  <img
+                    src={profile.avatarUrl || ELFY_MASCOT_ICON}
+                    alt={profile.nickname}
+                    className={styles.stackAvatar}
+                  />
+                )}
+              </span>
+              <span className={styles.participantsCount}>{peers.length}</span>
+            </button>
           )}
 
           <button

@@ -1,4 +1,19 @@
-import type { StreamFpsOption, StreamResolutionPreset } from './dtos';
+import type { AudioTelemetryDto, StreamFpsOption, StreamResolutionPreset } from './dtos';
+
+/** Baseline empty audio telemetry snapshot when no audio track/stream is active. */
+export const EMPTY_AUDIO_TELEMETRY: AudioTelemetryDto = {
+  hasAudio: false,
+  trackCount: 0,
+  codec: '',
+  sampleRateHz: 0,
+  channels: 0,
+  bitrateKbps: 0,
+  jitterBufferMs: 0,
+  jitterMs: 0,
+  packetsLost: 0,
+  packetLossPercent: 0,
+  audioLevel: null,
+};
 
 /** Runtime room capacity and concurrency limits. */
 export const ROOM_CONFIG = {

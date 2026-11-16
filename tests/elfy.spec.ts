@@ -322,7 +322,9 @@ test('Test 2 — Machine Fingerprint Lock & Single Hub per User', async ({ brows
   expect(initialTag).not.toBe('');
   expect(initialHubCode).toBe(`elfy/hub/${initialTag}`);
 
-  await page.goto('/#/register');
+  await page.getByRole('button', { name: /edit persona/i }).click();
+  await expect(page).toHaveURL(/#\/register$/);
+  await expect(page.getByRole('heading', { name: /update your profile/i })).toBeVisible();
   await expect(page.getByTestId('locked-peer-tag')).toContainText(initialTag);
   await page.getByRole('button', { name: /happy/i }).click();
   await page.locator('input[type="text"]').first().fill('NovaFox');
@@ -431,6 +433,7 @@ test('Test 5 — 30/60/120 FPS, Resolution Presets, Self-Preview Toggle & Floati
   await expect(header).not.toContainText('Connected');
   await expect(header).not.toContainText(/Stream(s)? Active/i);
   await expect(header.getByRole('button', { name: /minimize hub companion/i })).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('toggle-telemetry-panel-btn')).toHaveCount(0);
 
   const bottomDock = ownerRoom.getByTestId('bottom-dock');
   await expect(ownerRoom.getByTestId('system-metrics-badge')).toHaveCount(0);
@@ -486,13 +489,26 @@ test('Test 5 — 30/60/120 FPS, Resolution Presets, Self-Preview Toggle & Floati
   await ownerRoom.keyboard.press('Escape');
   await expect(settingsPopover).toBeHidden();
 
-  // Verify CPU/RAM/FPS telemetry in Hub Side Panel Telemetry & Stats tab
-  await ownerRoom.getByTestId('toggle-telemetry-panel-btn').click();
+  // Verify real browser CPU/RAM/FPS telemetry and honest NO AUDIO state via host card in Participants
+  await ownerRoom.getByTestId('toggle-participants-panel-btn').click();
+  const participantsPanel = ownerRoom.getByTestId('participants-panel');
+  await expect(participantsPanel).toBeVisible();
+  await participantsPanel.locator('[data-testid="peer-telemetry-btn"]:not([disabled])').first().click();
+
   const telemetryPanel = ownerRoom.getByTestId('telemetry-panel');
   await expect(telemetryPanel).toBeVisible();
-  await expect(telemetryPanel).toContainText(/CPU\s*\(\d+T\)\s*\d+%/i);
-  await expect(telemetryPanel).toContainText(/RAM.*\d+\.\d+\s*\/\s*\d+\.\d+\s*GB/i);
+  await expect(telemetryPanel.getByTestId('telemetry-device-card')).toContainText(
+    /(?:OS CPU|UI Thread)\s*\(\d+T\)\s*\d+%/i
+  );
+  await expect(telemetryPanel.getByTestId('telemetry-device-card')).toContainText(
+    /(?:System RAM|JS Heap).*(?:\d+\s*MB|\d+\.\d+\s*\/\s*\d+\.\d+\s*GB)/i
+  );
   await expect(telemetryPanel.getByTestId('telemetry-fps-chart')).toContainText(/Target:\s*120\s*FPS/i);
+  const audioCard = telemetryPanel.getByTestId('telemetry-audio-card');
+  await expect(audioCard).toContainText(/NO AUDIO/i);
+  await expect(audioCard).toContainText(/Video Only Stream/i);
+  await expect(audioCard).not.toContainText(/Opus Stereo/i);
+  await expect(audioCard).not.toContainText(/48kHz/i);
 });
 
 test('Test 6 — Minimize Active Hub Without Exiting', async ({ browser }) => {
@@ -1023,14 +1039,18 @@ test('Test 13 — Hub Side Panel Participants, Local Per-Peer Volume Control & H
   await waitForContinuousPlayback(ownerRoom, 1, 500);
   await waitForContinuousPlayback(guest2Room, 2, 500);
 
-  // Host opens Hub Side Panel -> Participants tab and verifies cards, sparklines, and invite copy.
+  // Host opens Hub Side Panel -> Participants list and verifies single close button, cards, sparklines, and telemetry buttons.
   await ownerRoom.getByTestId('toggle-participants-panel-btn').click();
-  await expect(ownerRoom.getByTestId('hub-side-panel')).toBeVisible();
-  await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
-  await expect(ownerRoom.getByTestId('hub-tab-participants')).toHaveAttribute(
-    'aria-selected',
-    'true'
-  );
+  const hubSidePanel = ownerRoom.getByTestId('hub-side-panel');
+  await expect(hubSidePanel).toBeVisible();
+  await expect(ownerRoom.getByTestId('close-hub-panel-btn')).toHaveCount(1);
+  await expect(hubSidePanel.getByRole('button', { name: /hide/i })).toHaveCount(0);
+  const participantsPanel = ownerRoom.getByTestId('participants-panel');
+  await expect(participantsPanel).toBeVisible();
+  await expect(ownerRoom.getByTestId('hub-tab-participants')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('hub-tab-telemetry')).toHaveCount(0);
+  await expect(ownerRoom.getByTestId('invite-copy-btn')).toHaveCount(0);
+  await expect(participantsPanel).not.toContainText(/invite to room/i);
 
   const ownerCards = ownerRoom.getByTestId('participant-card');
   await expect(ownerCards).toHaveCount(3);
@@ -1043,6 +1063,8 @@ test('Test 13 — Hub Side Panel Participants, Local Per-Peer Volume Control & H
   await expect(selfCardOnOwner).toContainText('Local · No Echo');
   await expect(selfCardOnOwner.getByTestId('participant-volume-slider')).toHaveCount(0);
   await expect(selfCardOnOwner.getByTestId('kick-peer-btn')).toHaveCount(0);
+  await expect(selfCardOnOwner.getByTestId('peer-telemetry-btn')).toBeVisible();
+  await expect(selfCardOnOwner.getByTestId('peer-telemetry-btn')).toBeEnabled();
   await assertSvgChartRendered(selfCardOnOwner);
 
   const guest1CardOnOwner = ownerRoom.locator(
@@ -1051,26 +1073,23 @@ test('Test 13 — Hub Side Panel Participants, Local Per-Peer Volume Control & H
   await expect(guest1CardOnOwner).toContainText('GUEST');
   await expect(guest1CardOnOwner).toContainText('LIVE');
   await expect(guest1CardOnOwner.getByTestId('kick-peer-btn')).toBeVisible();
+  await expect(guest1CardOnOwner.getByTestId('peer-telemetry-btn')).toBeVisible();
+  await expect(guest1CardOnOwner.getByTestId('peer-telemetry-btn')).toBeEnabled();
   await assertSvgChartRendered(guest1CardOnOwner);
 
-  await ownerRoom.evaluate(() => {
-    const win = window as unknown as { __ELFY_COPIED_HUB__?: string[] };
-    win.__ELFY_COPIED_HUB__ = [];
-    const proto = window.Clipboard?.prototype;
-    if (proto) {
-      proto.writeText = async (text: string) => {
-        win.__ELFY_COPIED_HUB__?.push(text);
-      };
-    }
-  });
-  const inviteBtn = ownerRoom.getByTestId('invite-copy-btn');
-  await inviteBtn.click();
-  await expect(inviteBtn).toContainText(/copied/i);
-  const copiedHubs = await ownerRoom.evaluate(() => {
-    const win = window as unknown as { __ELFY_COPIED_HUB__?: string[] };
-    return win.__ELFY_COPIED_HUB__ ?? [];
-  });
-  expect(copiedHubs).toEqual([`elfy/hub/${ownerPeerSafe}`]);
+  const nonStreamingCardOnOwner = ownerRoom.locator(
+    `[data-testid="participant-card"]:not([data-peer-id="${ownerPeerSafe}"]):not([data-peer-id="${guest1PeerSafe}"])`
+  );
+  await expect(nonStreamingCardOnOwner).toHaveCount(1);
+  await expect(nonStreamingCardOnOwner.getByTestId('peer-telemetry-btn')).toBeVisible();
+  await expect(nonStreamingCardOnOwner.getByTestId('peer-telemetry-btn')).toBeDisabled();
+
+  // Inspect Guest 1's inbound telemetry via the user list card action, then return to participants.
+  await guest1CardOnOwner.getByTestId('peer-telemetry-btn').click();
+  await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('telemetry-user-header')).toContainText(/INBOUND/i);
+  await ownerRoom.getByTestId('telemetry-back-btn').click();
+  await expect(participantsPanel).toBeVisible();
 
   // Guest 1 opens Participants panel and adjusts ONLY local volume/mute for Owner's stream.
   await guest1Room.getByTestId('toggle-participants-panel-btn').click();
@@ -1168,11 +1187,16 @@ test('Test 14 — Telemetry Charts, Time Windows, Layout Modes & Responsive Side
   await waitForContinuousPlayback(ownerRoom, 2, 600);
   await waitForContinuousPlayback(guestRoom, 1, 600);
 
-  // Open Telemetry & Stats via header pulse button and verify customizable charts + window switching.
-  await ownerRoom.getByTestId('toggle-telemetry-panel-btn').click();
+  // Verify top bar has no standalone telemetry icon; open streaming peer telemetry via Participants list.
+  await expect(ownerRoom.getByTestId('toggle-telemetry-panel-btn')).toHaveCount(0);
+  await ownerRoom.getByTestId('toggle-participants-panel-btn').click();
   await expect(ownerRoom.getByTestId('hub-side-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
+  await expect(ownerRoom.getByTestId('peer-telemetry-btn')).toHaveCount(2);
+
+  await ownerRoom.getByTestId('peer-telemetry-btn').first().click();
   await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
-  await expect(ownerRoom.getByTestId('hub-tab-telemetry')).toHaveAttribute('aria-selected', 'true');
+  await expect(ownerRoom.getByTestId('telemetry-user-header')).toContainText(/OUTBOUND/i);
 
   const bitrateChart = ownerRoom.getByTestId('telemetry-bitrate-chart');
   const fpsChart = ownerRoom.getByTestId('telemetry-fps-chart');
@@ -1203,11 +1227,14 @@ test('Test 14 — Telemetry Charts, Time Windows, Layout Modes & Responsive Side
   await expect(btn1m).toHaveAttribute('aria-selected', 'true');
   await expect(bitrateChart).toContainText('-60s');
 
-  // Switch between panel tabs and close cleanly.
-  await ownerRoom.getByTestId('hub-tab-participants').click();
+  // Switch to the other streaming user via quick switcher, return to Participants, and close cleanly.
+  const switcherButtons = ownerRoom.locator('[data-testid^="telemetry-switch-"]');
+  await expect(switcherButtons).toHaveCount(2);
+  await switcherButtons.nth(1).click();
+  await expect(ownerRoom.getByTestId('telemetry-user-header')).toContainText(/INBOUND/i);
+
+  await ownerRoom.getByTestId('telemetry-back-btn').click();
   await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
-  await ownerRoom.getByTestId('hub-tab-telemetry').click();
-  await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
   await ownerRoom.getByTestId('close-hub-panel-btn').click();
   await expect(ownerRoom.getByTestId('hub-side-panel')).toBeHidden();
 
@@ -1262,11 +1289,13 @@ test('Test 14 — Telemetry Charts, Time Windows, Layout Modes & Responsive Side
     await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
     await assertNoHorizontalOverflow(ownerRoom);
 
-    await ownerRoom.getByTestId('hub-tab-telemetry').click();
+    await ownerRoom.getByTestId('peer-telemetry-btn').first().click();
     await expect(ownerRoom.getByTestId('telemetry-panel')).toBeVisible();
     await assertSvgChartRendered(bitrateChart);
     await assertNoHorizontalOverflow(ownerRoom);
 
+    await ownerRoom.getByTestId('telemetry-back-btn').click();
+    await expect(ownerRoom.getByTestId('participants-panel')).toBeVisible();
     await ownerRoom.getByTestId('close-hub-panel-btn').click();
     await expect(ownerRoom.getByTestId('hub-side-panel')).toBeHidden();
     await assertNoHorizontalOverflow(ownerRoom);
@@ -1280,4 +1309,131 @@ test('Test 14 — Telemetry Charts, Time Windows, Layout Modes & Responsive Side
   await ownerRoom.getByTestId('layout-mode-focus').click();
   await expect(ownerRoom.getByTestId('streams-focus')).toBeVisible();
   await assertNoHorizontalOverflow(ownerRoom);
+});
+
+test('Test 15 — Real WebRTC Audio Telemetry & Video-Only Honesty', async ({ browser }) => {
+  test.setTimeout(60_000);
+  const context = await createTrackedContext(browser);
+  const { ownerRoom, guestRoom } = await admitGuestToOwnerHub(context, 't15');
+
+  // Inject a real Canvas video + Web Audio Opus oscillator stream on the Owner before sharing.
+  await ownerRoom.evaluate(() => {
+    const win = window as unknown as {
+      __ELFY_TEST_STREAM__?: MediaStream;
+      __ELFY_CLEANUP_TEST_AUDIO__?: () => void;
+    };
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    let frame = 0;
+    const drawFrame = () => {
+      if (!ctx) return;
+      frame += 1;
+      ctx.fillStyle = frame % 2 === 0 ? '#0b1020' : '#161b2e';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#fe2864';
+      ctx.fillRect((frame * 17) % 520, 90, 96, 96);
+    };
+    drawFrame();
+    const timer = window.setInterval(drawFrame, 33);
+
+    const stream = canvas.captureStream(30);
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const audioCtx = new AudioCtx();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    const dest = audioCtx.createMediaStreamDestination();
+    osc.frequency.value = 440;
+    gain.gain.value = 0.08;
+    osc.connect(gain);
+    gain.connect(dest);
+    osc.start();
+
+    const resumeAudio = () => {
+      void audioCtx.resume().catch(() => {});
+    };
+    window.addEventListener('pointerdown', resumeAudio, { once: true });
+    window.addEventListener('click', resumeAudio, { once: true });
+    resumeAudio();
+
+    for (const audioTrack of dest.stream.getAudioTracks()) {
+      stream.addTrack(audioTrack);
+    }
+
+    win.__ELFY_TEST_STREAM__ = stream;
+    win.__ELFY_CLEANUP_TEST_AUDIO__ = () => {
+      window.clearInterval(timer);
+      window.removeEventListener('pointerdown', resumeAudio);
+      window.removeEventListener('click', resumeAudio);
+      try {
+        osc.stop();
+      } catch {
+        // Ignore if oscillator was already stopped
+      }
+      void audioCtx.close().catch(() => {});
+      delete win.__ELFY_TEST_STREAM__;
+    };
+  });
+
+  // Start sharing video + real audio, and wait for Guest playback.
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(guestRoom, 1, 600);
+
+  // Guest opens Owner's inbound telemetry via Participants list and verifies real Opus audio telemetry.
+  await guestRoom.getByTestId('toggle-participants-panel-btn').click();
+  await expect(guestRoom.getByTestId('participants-panel')).toBeVisible();
+  await guestRoom.locator('[data-testid="peer-telemetry-btn"]:not([disabled])').first().click();
+
+  const guestTelemetryPanel = guestRoom.getByTestId('telemetry-panel');
+  await expect(guestTelemetryPanel).toBeVisible();
+  await expect(guestTelemetryPanel.getByTestId('telemetry-user-header')).toContainText(/INBOUND/i);
+
+  const audioCard = guestTelemetryPanel.getByTestId('telemetry-audio-card');
+  await expect
+    .poll(
+      async () => {
+        const text = await audioCard.innerText();
+        return text;
+      },
+      { timeout: 20_000 }
+    )
+    .toMatch(/OPUS/i);
+
+  await expect
+    .poll(
+      async () => {
+        const text = await audioCard.innerText();
+        return (
+          /OPUS/i.test(text) &&
+          /\d+(?:\.\d+)?\s*kHz/i.test(text) &&
+          /\b[1-9]\d*(?:,\d+)*(?:\.\d+)?\s*kbps\b/i.test(text) &&
+          /(?:SYNCHRONIZED|ACTIVE)/i.test(text) &&
+          /Jitter Buffer/i.test(text)
+        );
+      },
+      { timeout: 20_000 }
+    )
+    .toBe(true);
+
+  // Stop sharing cleanly, remove injected A/V stream, and re-share a video-only canvas stream.
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await ownerRoom.evaluate(() => {
+    const win = window as unknown as { __ELFY_CLEANUP_TEST_AUDIO__?: () => void };
+    win.__ELFY_CLEANUP_TEST_AUDIO__?.();
+    delete win.__ELFY_CLEANUP_TEST_AUDIO__;
+  });
+
+  // Confirm Guest auto-returns to Participants when inspected peer stops streaming.
+  await expect(guestRoom.getByTestId('participants-panel')).toBeVisible({ timeout: 15_000 });
+
+  // Owner starts a fresh video-only share and Guest inspects Owner's telemetry again.
+  await ownerRoom.getByTestId('toggle-share-btn').click();
+  await waitForContinuousPlayback(guestRoom, 1, 600);
+  await guestRoom.locator('[data-testid="peer-telemetry-btn"]:not([disabled])').first().click();
+  await expect(guestTelemetryPanel).toBeVisible();
+  await expect(audioCard).toContainText(/NO AUDIO/i);
+  await expect(audioCard).toContainText(/Video Only Stream/i);
+  await expect(audioCard).not.toContainText(/OPUS/i);
 });
